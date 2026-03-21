@@ -1,5 +1,64 @@
 ARG IMAGE=localhost/cache22/cachyos-base
+FROM $IMAGE:latest AS builder
+
+RUN pacman --noconfirm --needed -S \
+        git base-devel linux-cachyos-rc-headers clang llvm && \
+    useradd -m builder && \
+    echo "builder ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/builder && \
+    sed -i "s| debug| !debug|" /etc/makepkg.conf && \
+    ls /usr/lib/modules/ > /tmp/KVER
+
+# Build ntfsprogs-plus AUR package
+RUN git clone https://aur.archlinux.org/ntfsprogs-plus.git /tmp/ntfsprogs-plus && \
+    chown -R builder:builder /tmp/ntfsprogs-plus && \
+    sudo -u builder makepkg -D /tmp/ntfsprogs-plus -sc --noconfirm
+
+# Build ntfsplus kernel module and grab config files
+RUN git clone https://aur.archlinux.org/ntfsplus-dkms-git.git /tmp/ntfsplus-dkms-git-aur && \
+    git clone https://github.com/namjaejeon/linux-ntfs /tmp/linux-ntfs && \
+    KVER=$(cat /tmp/KVER) && \
+    make -C /usr/lib/modules/${KVER}/build M=/tmp/linux-ntfs modules \
+        CONFIG_NTFS_FS=m CONFIG_NTFS_FS_POSIX_ACL=y \
+        CC=clang LD=ld.lld AR=llvm-ar NM=llvm-nm STRIP=llvm-strip \
+        OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump READELF=llvm-readelf \
+        HOSTCC=clang HOSTCXX=clang++ LLVM=1 LLVM_IAS=1 && \
+    mkdir -p /tmp/modules/${KVER}/extra && \
+    cp /tmp/linux-ntfs/ntfs.ko /tmp/modules/${KVER}/extra/
+
+# Build xone-dongle-firmware AUR package
+RUN git clone https://aur.archlinux.org/xone-dongle-firmware.git /tmp/xone-dongle-firmware && \
+    chown -R builder:builder /tmp/xone-dongle-firmware && \
+    sudo -u builder makepkg -D /tmp/xone-dongle-firmware -sc --noconfirm
+
+# Build xone kernel module
+RUN git clone https://github.com/dlundqvist/xone.git /tmp/xone-src --branch v0.5.8 && \
+    find /tmp/xone-src -type f \( -name 'dkms.conf' -o -name '*.c' \) \
+        -exec sed -i "s/#VERSION#/0.5.8/" {} + && \
+    KVER=$(cat /tmp/KVER) && \
+    make -C /usr/lib/modules/${KVER}/build M=/tmp/xone-src modules \
+        CC=clang LD=ld.lld AR=llvm-ar NM=llvm-nm STRIP=llvm-strip \
+        OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump READELF=llvm-readelf \
+        HOSTCC=clang HOSTCXX=clang++ LLVM=1 LLVM_IAS=1 && \
+    cp /tmp/xone-src/*.ko /tmp/modules/${KVER}/extra/
+
 FROM $IMAGE:latest
+
+# Install AUR packages from builder stage
+COPY --from=builder /tmp/ntfsprogs-plus/*.pkg.tar.zst /tmp/aur/
+COPY --from=builder /tmp/xone-dongle-firmware/*.pkg.tar.zst /tmp/aur/
+RUN pacman --noconfirm --needed -U /tmp/aur/*.pkg.tar.zst && \
+    rm -rf /tmp/aur
+
+# Install kernel modules from builder stage
+COPY --from=builder /tmp/modules /usr/lib/modules/
+COPY --from=builder /tmp/ntfsplus-dkms-git-aur/00-ntfsplus.conf \
+    /etc/modprobe.d/00-ntfsplus.conf
+COPY --from=builder /tmp/ntfsplus-dkms-git-aur/90-udev-prefer-ntfsplus.rules \
+    /usr/lib/udev/rules.d/90-udev-prefer-ntfsplus.rules
+COPY --from=builder /tmp/xone-src/install/modprobe.conf \
+    /usr/lib/modprobe.d/xone-blacklist.conf
+
+RUN KVER=$(ls /usr/lib/modules/) && depmod -a ${KVER}
 
 RUN printf '[qemu-patched-v3]\nSigLevel = Optional\nServer = https://github.com/cmspam/qemu-patched/releases/download/latest-v3\n\n[gamescope-patched-v3]\nSigLevel = Optional\nServer = https://github.com/cmspam/gamescope-patched/releases/download/latest-v3\n' > /etc/pacman.d/cache22-repos && \
     sed -i 's|# REPOSITORIES|# REPOSITORIES\nInclude = /etc/pacman.d/cache22-repos|' /etc/pacman.conf && \

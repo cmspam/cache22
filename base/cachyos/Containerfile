@@ -28,11 +28,11 @@ RUN pacman-key --init && pacman-key --populate archlinux cachyos && \
         dosfstools xfsprogs \
         grub mkinitcpio efibootmgr \
         ostree skopeo podman which \
-        nano vim git wget curl htop \
+        nano vim git wget curl htop jq \
         man-db man-pages bash-completion \
         usbutils pciutils inetutils \
         openssh rsync zip unzip p7zip \
-        ntfs-3g exfatprogs udisks2 && \
+        exfatprogs udisks2 && \
     { \
         echo "LABEL=SYS_ROOT /         auto  rw,relatime 0 1"; \
         echo "LABEL=SYS_VAR  /var      auto  rw,relatime 0 2"; \
