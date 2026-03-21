@@ -1,129 +1,56 @@
 ARG IMAGE=localhost/cache22/cachyos-base
 FROM $IMAGE:latest
 
-# KDE Plasma
-RUN pacman --noconfirm --needed -S \
-    plasma-meta \
-    plasma-login-manager \
-    xdg-desktop-portal-kde \
-    xorg-xwayland \
-    dolphin \
-    konsole \
-    ark \
-    gwenview \
-    spectacle \
-    okular \
-    kate \
-    plasma-systemmonitor \
-    kscreen \
-    power-profiles-daemon \
-    packagekit-qt6 \
-    kdegraphics-thumbnailers \
-    ffmpegthumbs \
-    dolphin-plugins \
-    xdg-user-dirs \
-    plasma-browser-integration \
-    kdenetwork-filesharing
-
-RUN systemctl enable plasmalogin.service
-RUN systemctl enable power-profiles-daemon.service
-
-# Audio
-RUN pacman --noconfirm -Rdd jack || true
-RUN pacman --noconfirm --needed -S \
-    pipewire \
-    pipewire-alsa \
-    pipewire-audio \
-    pipewire-jack \
-    pipewire-pulse \
-    wireplumber \
-    gst-plugin-pipewire
-
-RUN systemctl --global enable pipewire.service \
-    pipewire.socket \
-    pipewire-pulse.service \
-    pipewire-pulse.socket \
-    wireplumber.service
-
-# Bluetooth
-RUN pacman --noconfirm --needed -S \
-    bluez \
-    bluez-utils
-
-RUN systemctl enable bluetooth.service
-
-# Printing
-RUN pacman --noconfirm --needed -S \
-    cups \
-    print-manager
-
-RUN systemctl enable cups.service
-
-# Fonts
-RUN pacman --noconfirm --needed -S \
-    noto-fonts \
-    noto-fonts-cjk \
-    noto-fonts-emoji \
-    noto-fonts-extra \
-    ttf-liberation \
-    ttf-dejavu \
-    adobe-source-han-sans-jp-fonts \
-    adobe-source-han-sans-cn-fonts \
-    adobe-source-han-sans-kr-fonts
-
-# Virtual filesystem — drives, phones, network shares
-RUN pacman --noconfirm --needed -S \
-    gvfs \
-    gvfs-mtp \
-    gvfs-smb \
-    gvfs-nfs
-
-# Flatpak
-RUN pacman --noconfirm --needed -S flatpak \
-    && flatpak remote-add --if-not-exists flathub \
-        https://dl.flathub.org/repo/flathub.flatpakrepo
-
-# Bazaar
-RUN pacman --noconfirm --needed -S bazaar
-
-# AMD graphics
-RUN pacman --noconfirm --needed -S \
-    mesa \
-    vulkan-radeon \
-    libva-mesa-driver
-
-# Intel graphics
-RUN pacman --noconfirm --needed -S \
-    vulkan-intel \
-    intel-media-driver \
-    libvpl \
-    vpl-gpu-rt
-
-# NVIDIA
-RUN pacman --noconfirm --needed -S \
-    linux-cachyos-nvidia-open \
-    nvidia-utils \
-    nvidia-settings \
-    egl-wayland \
-    libva-nvidia-driver
-
-# Vulkan common
-RUN pacman --noconfirm --needed -S \
-    vulkan-icd-loader \
-    lib32-vulkan-icd-loader \
-    lib32-vulkan-radeon \
-    lib32-vulkan-intel
-
-# Toolbox for development containers
-RUN pacman --noconfirm --needed -S toolbox
-RUN sed -i "s|^## distro =.*|distro = \"arch\"|" /etc/containers/toolbox.conf
-
-# Sudo and wheel
-RUN echo "%wheel ALL=(ALL) ALL" > /etc/sudoers.d/10-wheel
-RUN echo "%wheel ALL=NOPASSWD: /usr/bin/ostree" > /etc/sudoers.d/20-ostree
-
-# Kernel arguments
-RUN mkdir -p /usr/share/cache22 && { \
+RUN pacman --noconfirm -Rdd jack || true && \
+    pacman --noconfirm --needed -S \
+        plasma-meta plasma-login-manager \
+        xdg-desktop-portal-kde xorg-xwayland \
+        dolphin konsole ark gwenview spectacle okular kate \
+        plasma-systemmonitor kscreen power-profiles-daemon \
+        packagekit-qt6 kdegraphics-thumbnailers ffmpegthumbs \
+        dolphin-plugins xdg-user-dirs plasma-browser-integration \
+        kdenetwork-filesharing \
+        pipewire pipewire-alsa pipewire-audio pipewire-jack \
+        pipewire-pulse wireplumber gst-plugin-pipewire \
+        bluez bluez-utils \
+        cups print-manager \
+        noto-fonts noto-fonts-cjk noto-fonts-emoji noto-fonts-extra \
+        ttf-liberation ttf-dejavu \
+        adobe-source-han-sans-jp-fonts \
+        adobe-source-han-sans-cn-fonts \
+        adobe-source-han-sans-kr-fonts \
+        gvfs gvfs-mtp gvfs-smb gvfs-nfs \
+        flatpak bazaar \
+        mesa vulkan-radeon libva-mesa-driver \
+        vulkan-intel intel-media-driver libvpl vpl-gpu-rt \
+        linux-cachyos-nvidia-open nvidia-utils nvidia-settings \
+        egl-wayland libva-nvidia-driver \
+        vulkan-icd-loader lib32-vulkan-icd-loader \
+        lib32-vulkan-radeon lib32-vulkan-intel \
+        toolbox && \
+    systemctl enable plasmalogin.service && \
+    systemctl enable power-profiles-daemon.service && \
+    systemctl enable bluetooth.service && \
+    systemctl enable cups.service && \
+    systemctl --global enable \
+        pipewire.service pipewire.socket \
+        pipewire-pulse.service pipewire-pulse.socket \
+        wireplumber.service && \
+    sed -i "s|^## distro =.*|distro = \"arch\"|" /etc/containers/toolbox.conf && \
+    flatpak remote-add --if-not-exists flathub \
+        https://dl.flathub.org/repo/flathub.flatpakrepo && \
+    echo "%wheel ALL=(ALL) ALL" > /etc/sudoers.d/10-wheel && \
+    echo "%wheel ALL=NOPASSWD: /usr/bin/ostree" > /etc/sudoers.d/20-ostree && \
+    { \
+        echo "Cmnd_Alias YORHA = /usr/bin/yorha \"\",/usr/bin/yorha compose *,/usr/bin/yorha upgrade *,/usr/bin/yorha deployment *"; \
+        echo "Defaults!YORHA env_keep +=YORHA_BASE_PATH"; \
+        echo "Defaults!YORHA env_keep +=YORHA_LIBEXEC_PATH"; \
+        echo "Defaults!YORHA env_keep +=OSTREE_STATEROOT"; \
+        echo "Defaults!YORHA env_keep +=OSTREE_BRANCH"; \
+        echo "%wheel ALL=NOPASSWD: YORHA"; \
+    } > /etc/sudoers.d/30-yorha && \
+    mkdir -p /usr/share/cache22 && \
+    { \
         echo "quiet"; \
         echo "loglevel=3"; \
         echo "systemd.show_status=auto"; \
@@ -134,35 +61,24 @@ RUN mkdir -p /usr/share/cache22 && { \
         echo "rd.driver.blacklist=nouveau"; \
     } > /usr/share/cache22/.karg
 
-# Copy in yorha tooling
 COPY yorha /usr/bin/yorha
-RUN sed -i "s|libexec|/usr/libexec|" /usr/bin/yorha
 COPY base /usr/share/cache22/base
 COPY libexec /usr/libexec
-RUN sed -i "s|YORHA_BASE_PATH:-|YORHA_BASE_PATH:-/usr/share/cache22/|" \
-    /usr/libexec/yorha-config
 
-# Sudoers for yorha commands
-RUN { \
-        echo "Cmnd_Alias YORHA = /usr/bin/yorha \"\",/usr/bin/yorha compose *,/usr/bin/yorha upgrade *,/usr/bin/yorha deployment *"; \
-        echo "Defaults!YORHA env_keep +=YORHA_BASE_PATH"; \
-        echo "Defaults!YORHA env_keep +=YORHA_LIBEXEC_PATH"; \
-        echo "Defaults!YORHA env_keep +=OSTREE_STATEROOT"; \
-        echo "Defaults!YORHA env_keep +=OSTREE_BRANCH"; \
-        echo "%wheel ALL=NOPASSWD: YORHA"; \
-    } > /etc/sudoers.d/30-yorha
-
-# os-release branding
 ARG IMAGE
-RUN IMAGE=$(echo $IMAGE | sed "s|-base||") DATE=$(date +%Y%m%d.%H%M) \
-    && { \
+RUN sed -i "s|libexec|/usr/libexec|" /usr/bin/yorha && \
+    sed -i "s|YORHA_BASE_PATH:-|YORHA_BASE_PATH:-/usr/share/cache22/|" \
+        /usr/libexec/yorha-config && \
+    IMAGE=$(echo $IMAGE | sed "s|-base||") && \
+    DATE=$(date +%Y%m%d.%H%M) && \
+    { \
         echo 'NAME="Cache22"'; \
         echo "ID=cache22"; \
         echo "ID_LIKE=arch cachyos"; \
         echo "PRETTY_NAME=\"Cache22 $DATE\""; \
         echo "VERSION=$DATE"; \
         echo "IMAGE=$IMAGE"; \
-    } > /usr/lib/os-release \
-    && ln -sf ../usr/lib/os-release /etc/os-release
+    } > /usr/lib/os-release && \
+    ln -sf ../usr/lib/os-release /etc/os-release
 
 ENTRYPOINT ["/bin/bash"]

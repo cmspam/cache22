@@ -1,87 +1,47 @@
 FROM docker.io/cachyos/cachyos-v3:latest
 
-RUN pacman-key --init && pacman-key --populate archlinux cachyos
-
-RUN pacman --noconfirm -Syy
+RUN pacman-key --init && pacman-key --populate archlinux cachyos && \
+    pacman --noconfirm -Syy && \
+    ln -sf /usr/share/zoneinfo/${BASE_OPT_TIMEZONE} /etc/localtime
 
 ARG BASE_OPT_TIMEZONE
-RUN ln -sf /usr/share/zoneinfo/${BASE_OPT_TIMEZONE} /etc/localtime
-
 ARG BASE_OPT_KEYMAP
-RUN echo "KEYMAP=${BASE_OPT_KEYMAP}" | tee /etc/vconsole.conf
-
 ARG BASE_OPT_LANGUAGE
-RUN echo "LANG=${BASE_OPT_LANGUAGE}.UTF-8" | tee /etc/locale.conf \
-    && echo "${BASE_OPT_LANGUAGE}.UTF-8 UTF-8" | tee /etc/locale.gen \
-    && locale-gen
 
-# Networking
-RUN pacman --noconfirm --needed -S polkit networkmanager \
-    && systemctl enable NetworkManager.service \
-    && systemctl enable systemd-resolved.service \
-    && systemctl mask systemd-networkd-wait-online.service
-
-# OSTree mkinitcpio hook
-RUN mkdir -p /etc/mkinitcpio.conf.d \
-    && echo "HOOKS=(base systemd ostree autodetect modconf kms keyboard sd-vconsole block filesystems fsck)" \
-        >> /etc/mkinitcpio.conf.d/ostree.conf
-
-# Kernel, firmware, bootloader
-RUN pacman --noconfirm --needed -Syuu \
-    linux-cachyos \
-    linux-cachyos-headers \
-    linux-firmware \
-    sof-firmware \
-    alsa-firmware \
-    alsa-ucm-conf \
-    amd-ucode \
-    intel-ucode \
-    dosfstools \
-    xfsprogs \
-    grub \
-    mkinitcpio \
-    efibootmgr \
-    ostree \
-    skopeo \
-    podman \
-    which
-
-# Essential CLI tools
-RUN pacman --noconfirm --needed -S \
-    nano \
-    vim \
-    git \
-    wget \
-    curl \
-    htop \
-    man-db \
-    man-pages \
-    bash-completion \
-    usbutils \
-    pciutils \
-    inetutils \
-    openssh \
-    rsync \
-    zip \
-    unzip \
-    p7zip \
-    ntfs-3g \
-    exfatprogs \
-    udisks2
-
-RUN moduledir=$(find /usr/lib/modules -mindepth 1 -maxdepth 1 -type d) \
-    && kernel=$(cat ${moduledir}/pkgbase) \
-    && cat /boot/*-ucode.img /boot/initramfs-${kernel}.img > ${moduledir}/initramfs.img
-
-RUN echo "options overlay metacopy=off redirect_dir=off" \
-    > /etc/modprobe.d/disable-overlay-redirect-dir.conf
-
-RUN echo "blacklist nouveau" > /etc/modprobe.d/blacklist-nouveau.conf
-
-RUN { \
+RUN ln -sf /usr/share/zoneinfo/${BASE_OPT_TIMEZONE} /etc/localtime && \
+    echo "KEYMAP=${BASE_OPT_KEYMAP}" > /etc/vconsole.conf && \
+    echo "LANG=${BASE_OPT_LANGUAGE}.UTF-8" > /etc/locale.conf && \
+    echo "${BASE_OPT_LANGUAGE}.UTF-8 UTF-8" > /etc/locale.gen && \
+    locale-gen && \
+    mkdir -p /etc/mkinitcpio.conf.d && \
+    echo "HOOKS=(base systemd ostree autodetect modconf kms keyboard sd-vconsole block filesystems fsck)" \
+        > /etc/mkinitcpio.conf.d/ostree.conf && \
+    echo "options overlay metacopy=off redirect_dir=off" \
+        > /etc/modprobe.d/disable-overlay-redirect-dir.conf && \
+    echo "blacklist nouveau" > /etc/modprobe.d/blacklist-nouveau.conf && \
+    pacman --noconfirm --needed -S polkit networkmanager && \
+    systemctl enable NetworkManager.service && \
+    systemctl enable systemd-resolved.service && \
+    systemctl mask systemd-networkd-wait-online.service && \
+    pacman --noconfirm --needed -Syuu \
+        linux-cachyos linux-cachyos-headers linux-firmware \
+        sof-firmware alsa-firmware alsa-ucm-conf \
+        amd-ucode intel-ucode \
+        dosfstools xfsprogs \
+        grub mkinitcpio efibootmgr \
+        ostree skopeo podman which \
+        nano vim git wget curl htop \
+        man-db man-pages bash-completion \
+        usbutils pciutils inetutils \
+        openssh rsync zip unzip p7zip \
+        ntfs-3g exfatprogs udisks2 && \
+    { \
         echo "LABEL=SYS_ROOT /         auto  rw,relatime 0 1"; \
         echo "LABEL=SYS_VAR  /var      auto  rw,relatime 0 2"; \
         echo "LABEL=SYS_BOOT /boot/efi vfat  rw,relatime,fmask=0022,dmask=0022,codepage=437,iocharset=ascii,shortname=mixed,utf8,errors=remount-ro 0 2"; \
-    } > /etc/fstab
+    } > /etc/fstab && \
+    echo "root:cache22" | chpasswd
 
-RUN echo "root:cache22" | chpasswd
+RUN moduledir=$(find /usr/lib/modules -mindepth 1 -maxdepth 1 -type d) && \
+    kernel=$(cat ${moduledir}/pkgbase) && \
+    cat /boot/*-ucode.img /boot/initramfs-${kernel}.img > ${moduledir}/initramfs.img
