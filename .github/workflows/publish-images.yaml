@@ -29,7 +29,7 @@ jobs:
       - name: Build container images and publish
         run: |
           sed -i "0,/localhost/s/localhost/$OCI_REGISTRY/" libexec/yorha-config
-          sed -i "s|IMAGE=localhost|IMAGE=$OCI_REGISTRY/$GH_ACCOUNT|g" base/$DEFAULT_BASE/Containerfile.yorha
+          sed -i "s|IMAGE=localhost|IMAGE=$OCI_REGISTRY/$GH_ACCOUNT|g" base/$DEFAULT_BASE/Containerfile.cache22
           ./yorha compose container-base
           ./yorha compose container
           for _image in $OCI_REGISTRY/$GH_ACCOUNT/$GH_PROJECT/$DEFAULT_BASE-base \

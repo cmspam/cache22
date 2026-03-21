@@ -29,10 +29,10 @@ builder_ostree_image ()
 
   OCI_TAG="$OCI_TAG:latest"
 
-  info "Starting build of OSTree image $_base-$OSTREE_STATEROOT ($OCI_TAG) using $_basedir/Containerfile.yorha..."
+  info "Starting build of OSTree image $_base-$OSTREE_STATEROOT ($OCI_TAG) using $_basedir/Containerfile.cache22..."
 
   run $_runtime build \
-    --file "$_basedir/Containerfile.yorha" \
+    --file "$_basedir/Containerfile.cache22" \
     --tag "$OCI_TAG" "${YORHA_BASE_PATH:-.}"
 
   info "Successfully built OSTree image $_base-$OSTREE_STATEROOT as $OCI_TAG"

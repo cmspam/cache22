@@ -1,0 +1,110 @@
+ARG IMAGE=localhost/cache22/cachyos-base
+FROM $IMAGE:latest
+
+# KDE Plasma
+RUN pacman --noconfirm --needed -S \
+    plasma-meta \
+    plasma-login-manager \
+    xdg-desktop-portal-kde \
+    xorg-xwayland \
+    dolphin \
+    konsole \
+    ark \
+    gwenview \
+    spectacle \
+    okular \
+    kate \
+    plasma-systemmonitor \
+    kscreen \
+    power-profiles-daemon
+
+RUN systemctl enable plasma-login-manager.service
+RUN systemctl enable power-profiles-daemon.service
+
+# Flatpak
+RUN pacman --noconfirm --needed -S flatpak \
+    && flatpak remote-add --if-not-exists flathub \
+        https://dl.flathub.org/repo/flathub.flatpakrepo
+
+# AMD graphics
+RUN pacman --noconfirm --needed -S \
+    mesa \
+    vulkan-radeon \
+    libva-mesa-driver \
+    mesa-vdpau
+
+# Intel graphics (Xe driver is automatic on Lunar Lake+, i915 on older — same packages either way)
+RUN pacman --noconfirm --needed -S \
+    mesa \
+    vulkan-intel \
+    intel-media-driver \
+    libvpl \
+    vpl-gpu-rt
+
+# NVIDIA
+RUN pacman --noconfirm --needed -S \
+    linux-cachyos-nvidia-open \
+    nvidia-utils \
+    nvidia-settings \
+    egl-wayland \
+    libva-nvidia-driver
+
+# Vulkan common
+RUN pacman --noconfirm --needed -S \
+    vulkan-icd-loader \
+    lib32-vulkan-icd-loader \
+    lib32-vulkan-radeon \
+    lib32-vulkan-intel
+
+# Toolbox for development containers
+RUN pacman --noconfirm --needed -S toolbox
+RUN sed -i "s|^## distro =.*|distro = \"arch\"|" /etc/containers/toolbox.conf
+
+# Sudo and wheel
+RUN echo "%wheel ALL=(ALL) ALL" > /etc/sudoers.d/10-wheel
+RUN echo "%wheel ALL=NOPASSWD: /usr/bin/ostree" > /etc/sudoers.d/20-ostree
+
+# Kernel arguments
+RUN mkdir -p /usr/share/cache22 && { \
+        echo "quiet"; \
+        echo "loglevel=3"; \
+        echo "systemd.show_status=auto"; \
+        echo "rd.udev.log_level=3"; \
+        echo "nvidia-drm.modeset=1"; \
+        echo "nvidia-drm.fbdev=1"; \
+        echo "modprobe.blacklist=nouveau"; \
+        echo "rd.driver.blacklist=nouveau"; \
+    } > /usr/share/cache22/.karg
+
+# Copy in yorha tooling
+COPY yorha /usr/bin/yorha
+RUN sed -i "s|libexec|/usr/libexec|" /usr/bin/yorha
+COPY base /usr/share/cache22/base
+COPY libexec /usr/libexec
+RUN sed -i "s|YORHA_BASE_PATH:-|YORHA_BASE_PATH:-/usr/share/cache22/|" \
+    /usr/libexec/yorha-config
+
+# Sudoers for yorha commands
+RUN { \
+        echo "Cmnd_Alias YORHA = /usr/bin/yorha \"\",/usr/bin/yorha compose *,/usr/bin/yorha upgrade *,/usr/bin/yorha deployment *"; \
+        echo "Defaults!YORHA env_keep +=YORHA_BASE_PATH"; \
+        echo "Defaults!YORHA env_keep +=YORHA_LIBEXEC_PATH"; \
+        echo "Defaults!YORHA env_keep +=OSTREE_STATEROOT"; \
+        echo "Defaults!YORHA env_keep +=OSTREE_BRANCH"; \
+        echo "%wheel ALL=NOPASSWD: YORHA"; \
+    } > /etc/sudoers.d/30-yorha
+
+# os-release branding
+ARG IMAGE
+RUN IMAGE=$(echo $IMAGE | sed "s|-base||") DATE=$(date +%Y%m%d.%H%M) \
+    && { \
+        echo 'NAME="Cache22"'; \
+        echo "ID=cache22"; \
+        echo "ID_LIKE=arch cachyos"; \
+        echo "PRETTY_NAME=\"Cache22 $DATE\""; \
+        echo "VERSION=$DATE"; \
+        echo "IMAGE=$IMAGE"; \
+    } > /usr/lib/os-release \
+    && ln -sf ../usr/lib/os-release /etc/os-release
+
+ENTRYPOINT ["/bin/bash"]
