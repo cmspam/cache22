@@ -1,14 +1,12 @@
 FROM docker.io/cachyos/cachyos-v3:latest
 
-RUN pacman-key --init && pacman-key --populate archlinux cachyos && \
-    pacman --noconfirm -Syy && \
-    ln -sf /usr/share/zoneinfo/${BASE_OPT_TIMEZONE} /etc/localtime
-
 ARG BASE_OPT_TIMEZONE
 ARG BASE_OPT_KEYMAP
 ARG BASE_OPT_LANGUAGE
 
-RUN ln -sf /usr/share/zoneinfo/${BASE_OPT_TIMEZONE} /etc/localtime && \
+RUN pacman-key --init && pacman-key --populate archlinux cachyos && \
+    pacman --noconfirm -Syy && \
+    ln -sf /usr/share/zoneinfo/${BASE_OPT_TIMEZONE} /etc/localtime && \
     echo "KEYMAP=${BASE_OPT_KEYMAP}" > /etc/vconsole.conf && \
     echo "LANG=${BASE_OPT_LANGUAGE}.UTF-8" > /etc/locale.conf && \
     echo "${BASE_OPT_LANGUAGE}.UTF-8 UTF-8" > /etc/locale.gen && \
@@ -24,7 +22,7 @@ RUN ln -sf /usr/share/zoneinfo/${BASE_OPT_TIMEZONE} /etc/localtime && \
     systemctl enable systemd-resolved.service && \
     systemctl mask systemd-networkd-wait-online.service && \
     pacman --noconfirm --needed -Syuu \
-        linux-cachyos linux-cachyos-headers linux-firmware \
+        linux-cachyos-rc linux-cachyos-rc-headers linux-firmware \
         sof-firmware alsa-firmware alsa-ucm-conf \
         amd-ucode intel-ucode \
         dosfstools xfsprogs \

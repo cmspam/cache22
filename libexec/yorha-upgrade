@@ -22,7 +22,7 @@ ostree_upgrade ()
     info "Preparing to upgrade system..."
 
     export OSTREE_SYS_ROOT=/sysroot
-    export OSTREE_SYS_SETUP=/tmp
+    export OSTREE_SYS_SETUP=/var/cache22-build
     export OSTREE_SYS_TREE=$OSTREE_SYS_SETUP/rootfs
 
     info "OSTREE_SYS_ROOT set to $OSTREE_SYS_ROOT"
