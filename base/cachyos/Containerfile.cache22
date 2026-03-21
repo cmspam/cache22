@@ -18,7 +18,7 @@ RUN pacman --noconfirm --needed -S \
     kscreen \
     power-profiles-daemon
 
-RUN systemctl enable plasma-login-manager.service
+RUN systemctl enable plasmalogin.service
 RUN systemctl enable power-profiles-daemon.service
 
 # Flatpak
@@ -30,12 +30,10 @@ RUN pacman --noconfirm --needed -S flatpak \
 RUN pacman --noconfirm --needed -S \
     mesa \
     vulkan-radeon \
-    libva-mesa-driver \
-    mesa-vdpau
+    libva-mesa-driver 
 
 # Intel graphics (Xe driver is automatic on Lunar Lake+, i915 on older — same packages either way)
 RUN pacman --noconfirm --needed -S \
-    mesa \
     vulkan-intel \
     intel-media-driver \
     libvpl \
