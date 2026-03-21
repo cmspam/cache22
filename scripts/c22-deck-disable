@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -e
+
+if [[ $EUID -ne 0 ]]; then
+    echo "Run with sudo"
+    exit 1
+fi
+
+rm -f /etc/plasmalogin.conf.d/deck.conf
+echo "Deck mode disabled. Reboot to return to normal KDE session."

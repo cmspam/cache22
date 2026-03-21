@@ -84,7 +84,7 @@ RUN printf '[qemu-patched-v3]\nSigLevel = Optional\nServer = https://github.com/
         adobe-source-han-sans-kr-fonts \
         gvfs gvfs-mtp gvfs-smb gvfs-nfs \
         flatpak bazaar \
-        mesa-git  \
+        mesa-git \
         intel-media-driver libvpl vpl-gpu-rt \
         linux-cachyos-nvidia-open nvidia-utils nvidia-settings \
         egl-wayland libva-nvidia-driver \
@@ -117,6 +117,8 @@ RUN printf '[qemu-patched-v3]\nSigLevel = Optional\nServer = https://github.com/
         echo "Defaults!YORHA env_keep +=OSTREE_BRANCH"; \
         echo "%wheel ALL=NOPASSWD: YORHA"; \
     } > /etc/sudoers.d/30-yorha && \
+    echo "root:1000000:65536" >> /etc/subuid && \
+    echo "root:1000000:65536" >> /etc/subgid && \
     mkdir -p /usr/share/cache22 && \
     { \
         echo "quiet"; \
@@ -140,11 +142,23 @@ RUN printf '[qemu-patched-v3]\nSigLevel = Optional\nServer = https://github.com/
 COPY yorha /usr/bin/yorha
 COPY base /usr/share/cache22/base
 COPY libexec /usr/libexec
+COPY scripts/c22-deck-enable /usr/bin/c22-deck-enable
+COPY scripts/c22-deck-disable /usr/bin/c22-deck-disable
 
 ARG IMAGE
 RUN sed -i "s|libexec|/usr/libexec|" /usr/bin/yorha && \
     sed -i "s|YORHA_BASE_PATH:-|YORHA_BASE_PATH:-/usr/share/cache22/|" \
         /usr/libexec/yorha-config && \
+    sed -i "s|OCI_REGISTRY:-localhost|OCI_REGISTRY:-ghcr.io|" \
+        /usr/libexec/yorha-config && \
+    sed -i "s|GH_ACCOUNT:-lcook|GH_ACCOUNT:-cmspam|" \
+        /usr/libexec/yorha-config && \
+    sed -i "s|GH_PROJECT:-yorha|GH_PROJECT:-cache22|" \
+        /usr/libexec/yorha-config && \
+    chmod +x /usr/bin/c22-deck-enable /usr/bin/c22-deck-disable && \
+    printf '#!/usr/bin/env bash\nset -e\nsudo yorha upgrade remote\n' \
+        > /usr/bin/c22-update && \
+    chmod +x /usr/bin/c22-update && \
     IMAGE=$(echo $IMAGE | sed "s|-base||") && \
     DATE=$(date +%Y%m%d.%H%M) && \
     { \

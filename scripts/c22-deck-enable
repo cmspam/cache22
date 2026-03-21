@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+set -e
+
+if [[ $EUID -ne 0 ]]; then
+    echo "Run with sudo"
+    exit 1
+fi
+
+if usr=$(id -nu 1000 2>/dev/null) && [[ -n "$usr" ]]; then
+    echo "Configuring deck mode for $usr"
+elif usr=$(id -nu 1001 2>/dev/null) && [[ -n "$usr" ]]; then
+    echo "Configuring deck mode for $usr"
+else
+    echo "No user found at uid 1000 or 1001"
+    exit 1
+fi
+
+SESSION=$(ls /usr/share/wayland-sessions/gamescope*.desktop 2>/dev/null | head -1 | xargs basename | sed 's/.desktop//')
+
+if [[ -z "$SESSION" ]]; then
+    echo "No gamescope session found in /usr/share/wayland-sessions/"
+    exit 1
+fi
+
+echo "Using session: $SESSION"
+
+mkdir -p /etc/plasmalogin.conf.d
+cat > /etc/plasmalogin.conf.d/deck.conf << CONF
+[Autologin]
+User=${usr}
+Session=${SESSION}
+Relogin=true
+CONF
+
+echo "Deck mode enabled for $usr using session $SESSION. Reboot to enter gaming mode."
