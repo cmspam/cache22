@@ -2,7 +2,7 @@ FROM docker.io/cachyos/cachyos-v3:latest
 
 RUN pacman-key --init && pacman-key --populate archlinux cachyos
 
-RUN pacman --noconfirm -Sy
+RUN pacman --noconfirm -Syy
 
 ARG BASE_OPT_TIMEZONE
 RUN ln -sf /usr/share/zoneinfo/${BASE_OPT_TIMEZONE} /etc/localtime
@@ -15,15 +15,18 @@ RUN echo "LANG=${BASE_OPT_LANGUAGE}.UTF-8" | tee /etc/locale.conf \
     && echo "${BASE_OPT_LANGUAGE}.UTF-8 UTF-8" | tee /etc/locale.gen \
     && locale-gen
 
-RUN pacman --noconfirm --needed -S networkmanager \
+# Networking
+RUN pacman --noconfirm --needed -S polkit networkmanager \
     && systemctl enable NetworkManager.service \
     && systemctl enable systemd-resolved.service \
     && systemctl mask systemd-networkd-wait-online.service
 
+# OSTree mkinitcpio hook
 RUN mkdir -p /etc/mkinitcpio.conf.d \
     && echo "HOOKS=(base systemd ostree autodetect modconf kms keyboard sd-vconsole block filesystems fsck)" \
         >> /etc/mkinitcpio.conf.d/ostree.conf
 
+# Kernel, firmware, bootloader
 RUN pacman --noconfirm --needed -Syuu \
     linux-cachyos \
     linux-cachyos-headers \
@@ -42,6 +45,29 @@ RUN pacman --noconfirm --needed -Syuu \
     skopeo \
     podman \
     which
+
+# Essential CLI tools
+RUN pacman --noconfirm --needed -S \
+    nano \
+    vim \
+    git \
+    wget \
+    curl \
+    htop \
+    man-db \
+    man-pages \
+    bash-completion \
+    usbutils \
+    pciutils \
+    inetutils \
+    openssh \
+    rsync \
+    zip \
+    unzip \
+    p7zip \
+    ntfs-3g \
+    exfatprogs \
+    udisks2
 
 RUN moduledir=$(find /usr/lib/modules -mindepth 1 -maxdepth 1 -type d) \
     && kernel=$(cat ${moduledir}/pkgbase) \
