@@ -14,8 +14,8 @@ export YORHA_BASE_PATH="${YORHA_BASE_PATH:-}" # Path to YoRHa project root direc
 #
 export OCI_REGISTRY="${OCI_REGISTRY:-localhost}"
 export OCI_RUNTIME="${OCI_RUNTIME:-podman}"
-export GH_ACCOUNT="${GH_ACCOUNT:-lcook}"
-export GH_PROJECT="${GH_PROJECT:-yorha}"
+export GH_ACCOUNT="${GH_ACCOUNT:-cmspam}"
+export GH_PROJECT="${GH_PROJECT:-cache22}"
 #
 # ----------------------------------------------------------------------
 # Base image build arguments
@@ -31,11 +31,11 @@ export GH_PROJECT="${GH_PROJECT:-yorha}"
 #   DEFAULT_BASE_LANGUAGE=de_DE \
 #   yorha compose container-base
 #
-export DEFAULT_BASE="${DEFAULT_BASE:-archlinux}" # Linux distribution base image
+export DEFAULT_BASE="${DEFAULT_BASE:-cachyos}" # Linux distribution base image
 export DEFAULT_FLAVOR="${DEFAULT_FLAVOR:-}" # Flavor of the base image (if any)
-export DEFAULT_BASE_TIMEZONE="${DEFAULT_BASE_TIMEZONE:-Europe/London}" # Timezone
+export DEFAULT_BASE_TIMEZONE="${DEFAULT_BASE_TIMEZONE:-Asia/Tokyo}" # Timezone
 export DEFAULT_BASE_KEYMAP="${DEFAULT_BASE_KEYMAP:-us}" # Console key-map
-export DEFAULT_BASE_LANGUAGE="${DEFAULT_BASE_LANGUAGE:-en_GB}" # Locale string
+export DEFAULT_BASE_LANGUAGE="${DEFAULT_BASE_LANGUAGE:-en_US}" # Locale string
 #
 # ----------------------------------------------------------------------
 # OSTree system configuration
@@ -44,7 +44,7 @@ export DEFAULT_BASE_LANGUAGE="${DEFAULT_BASE_LANGUAGE:-en_GB}" # Locale string
 # These variables define the structure and behaviour of an OSTree-based
 # immutable system.  Largely can remain unchanged.
 #
-export OSTREE_STATEROOT="${OSTREE_STATEROOT:-yorha}" # Deployment namespace identifier (conventionally under `/ostree/deploy`) 
+export OSTREE_STATEROOT="${OSTREE_STATEROOT:-cache22}" # Deployment namespace identifier (conventionally under `/ostree/deploy`) 
 export OSTREE_BRANCH="${OSTREE_BRANCH:-${OSTREE_STATEROOT}/x86_64/standard}" # OSTree branch reference name (<stateroot>/<architecture>/<ref>)
 # Mount points for deployments and upgrades
 export OSTREE_SYS_ROOT="${OSTREE_SYS_ROOT:-/mnt}" # Mount point for target system during initial bootstrap.  Set to `/sysroot` if already an OSTree environment

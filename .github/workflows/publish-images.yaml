@@ -11,8 +11,8 @@ env:
   OCI_REGISTRY: ghcr.io
   GH_ACCOUNT: ${{ github.actor }}
   GH_PROJECT: ${{ github.event.repository.name }}
-  OSTREE_STATEROOT: yorha
-  DEFAULT_BASE: archlinux
+  OSTREE_STATEROOT: cache22
+  DEFAULT_BASE: cachyos
 
 jobs:
   build-publish:
@@ -29,12 +29,8 @@ jobs:
       - name: Build container images and publish
         run: |
           sed -i "0,/localhost/s/localhost/$OCI_REGISTRY/" libexec/yorha-config
-          sed -i "s|IMAGE=localhost|IMAGE=$OCI_REGISTRY/$GH_ACCOUNT|g" base/$DEFAULT_BASE/Containerfile.yorha base/$DEFAULT_BASE/flavor/*
+          sed -i "s|IMAGE=localhost|IMAGE=$OCI_REGISTRY/$GH_ACCOUNT|g" base/$DEFAULT_BASE/Containerfile.yorha
           ./yorha compose container-base
           ./yorha compose container
           for _image in $OCI_REGISTRY/$GH_ACCOUNT/$GH_PROJECT/$DEFAULT_BASE-base \
             $OCI_REGISTRY/$GH_ACCOUNT/$GH_PROJECT/$DEFAULT_BASE; do podman push $_image; done
-          for _flavor in nvidia intel; do
-            ./yorha compose flavor $DEFAULT_BASE-$_flavor
-            podman push $OCI_REGISTRY/$GH_ACCOUNT/$GH_PROJECT/$DEFAULT_BASE-$_flavor
-          done
