@@ -21,18 +21,50 @@ RUN pacman --noconfirm --needed -S \
 RUN systemctl enable plasmalogin.service
 RUN systemctl enable power-profiles-daemon.service
 
+# Audio
+RUN pacman --noconfirm -Rdd jack || true
+RUN pacman --noconfirm --needed -S \
+    pipewire \
+    pipewire-alsa \
+    pipewire-audio \
+    pipewire-jack \
+    pipewire-pulse \
+    wireplumber \
+    gst-plugin-pipewire
+
+RUN systemctl --global enable pipewire.service \
+    pipewire.socket \
+    pipewire-pulse.service \
+    pipewire-pulse.socket \
+    wireplumber.service
+
+# Fonts
+RUN pacman --noconfirm --needed -S \
+    noto-fonts \
+    noto-fonts-cjk \
+    noto-fonts-emoji \
+    noto-fonts-extra \
+    ttf-liberation \
+    ttf-dejavu \
+    adobe-source-han-sans-jp-fonts \
+    adobe-source-han-sans-cn-fonts \
+    adobe-source-han-sans-kr-fonts
+
 # Flatpak
 RUN pacman --noconfirm --needed -S flatpak \
     && flatpak remote-add --if-not-exists flathub \
         https://dl.flathub.org/repo/flathub.flatpakrepo
 
+# Bazaar
+RUN pacman --noconfirm --needed -S bazaar
+
 # AMD graphics
 RUN pacman --noconfirm --needed -S \
     mesa \
     vulkan-radeon \
-    libva-mesa-driver 
+    libva-mesa-driver
 
-# Intel graphics (Xe driver is automatic on Lunar Lake+, i915 on older — same packages either way)
+# Intel graphics
 RUN pacman --noconfirm --needed -S \
     vulkan-intel \
     intel-media-driver \

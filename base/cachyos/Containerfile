@@ -17,6 +17,7 @@ RUN echo "LANG=${BASE_OPT_LANGUAGE}.UTF-8" | tee /etc/locale.conf \
 
 RUN pacman --noconfirm --needed -S networkmanager \
     && systemctl enable NetworkManager.service \
+    && systemctl enable systemd-resolved.service \
     && systemctl mask systemd-networkd-wait-online.service
 
 RUN mkdir -p /etc/mkinitcpio.conf.d \
@@ -27,6 +28,9 @@ RUN pacman --noconfirm --needed -Syuu \
     linux-cachyos \
     linux-cachyos-headers \
     linux-firmware \
+    sof-firmware \
+    alsa-firmware \
+    alsa-ucm-conf \
     amd-ucode \
     intel-ucode \
     dosfstools \
