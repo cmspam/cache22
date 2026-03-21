@@ -2,7 +2,7 @@ ARG IMAGE=localhost/cache22/cachyos-base
 FROM $IMAGE:latest AS builder
 
 RUN pacman --noconfirm --needed -S \
-        git base-devel linux-cachyos-rc-headers clang llvm && \
+        git base-devel linux-cachyos-headers clang llvm && \
     useradd -m builder && \
     echo "builder ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/builder && \
     sed -i "s| debug| !debug|" /etc/makepkg.conf && \
@@ -63,8 +63,9 @@ RUN KVER=$(ls /usr/lib/modules/) && depmod -a ${KVER}
 RUN printf '[qemu-patched-v3]\nSigLevel = Optional\nServer = https://github.com/cmspam/qemu-patched/releases/download/latest-v3\n\n[gamescope-patched-v3]\nSigLevel = Optional\nServer = https://github.com/cmspam/gamescope-patched/releases/download/latest-v3\n' > /etc/pacman.d/cache22-repos && \
     sed -i 's|# REPOSITORIES|# REPOSITORIES\nInclude = /etc/pacman.d/cache22-repos|' /etc/pacman.conf && \
     pacman --noconfirm -Sy && \
-    pacman --noconfirm -Rdd jack || true && \
+    pacman --noconfirm -Rdd iptables || true && \
     pacman --noconfirm --needed -S \
+        iptables-nft \
         plasma-meta plasma-login-manager \
         xdg-desktop-portal-kde xorg-xwayland \
         dolphin konsole ark gwenview spectacle okular kate \
@@ -83,13 +84,14 @@ RUN printf '[qemu-patched-v3]\nSigLevel = Optional\nServer = https://github.com/
         adobe-source-han-sans-kr-fonts \
         gvfs gvfs-mtp gvfs-smb gvfs-nfs \
         flatpak bazaar \
-        mesa vulkan-radeon libva-mesa-driver \
-        vulkan-intel intel-media-driver libvpl vpl-gpu-rt \
-        linux-cachyos-rc-nvidia-open nvidia-utils nvidia-settings \
+        mesa-git  \
+        intel-media-driver libvpl vpl-gpu-rt \
+        linux-cachyos-nvidia-open nvidia-utils nvidia-settings \
         egl-wayland libva-nvidia-driver \
         vulkan-icd-loader lib32-vulkan-icd-loader \
         lib32-vulkan-radeon lib32-vulkan-intel \
-        toolbox \
+        toolbox distrobox incus incus-tools incus-ui \
+        supergfxctl \
         cachyos-gaming-applications \
         qemu-desktop \
         fcitx5 fcitx5-mozc fcitx5-qt fcitx5-gtk fcitx5-configtool \

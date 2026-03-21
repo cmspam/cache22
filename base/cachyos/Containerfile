@@ -22,7 +22,7 @@ RUN pacman-key --init && pacman-key --populate archlinux cachyos && \
     systemctl enable systemd-resolved.service && \
     systemctl mask systemd-networkd-wait-online.service && \
     pacman --noconfirm --needed -Syuu \
-        linux-cachyos-rc linux-cachyos-rc-headers linux-firmware \
+        linux-cachyos linux-cachyos-headers linux-firmware \
         sof-firmware alsa-firmware alsa-ucm-conf \
         amd-ucode intel-ucode \
         dosfstools xfsprogs \
