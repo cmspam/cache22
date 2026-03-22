@@ -10,7 +10,7 @@ The name is a joke — using a bleeding-edge, performance-optimized Linux distri
 
 Cache22 resolves this by building on top of CachyOS's excellent x86-64-v3 optimized packages and repositories, but delivering them as an **immutable, atomic OS image** powered by [OSTree](https://ostreedev.github.io/ostree). The system is read-only and reproducible. Updates are atomic and reversible. You never end up in a half-broken state. When something goes wrong, you roll back.
 
-Built on the [YoRHa](https://github.com/lcook/yorha) toolkit, Cache22 gives you a clean, vanilla KDE Plasma desktop on Wayland with everything you need already baked in — gaming tools, virtualization, container support, input methods, broad hardware support — without any of the configuration burden.
+Built on the [YoRHa](https://github.com/lcook/yorha) toolkit, Cache22 gives you a clean, vanilla KDE Plasma desktop on Wayland with everything you need already baked in — gaming tools, virtualization, container support, input methods, and broad hardware support — without any of the configuration burden.
 
 ---
 
@@ -18,8 +18,8 @@ Built on the [YoRHa](https://github.com/lcook/yorha) toolkit, Cache22 gives you 
 
 - **Immutable root** — `/usr` and `/` are read-only. The system is exactly what was built, on every machine, every time.
 - **Atomic updates** — updates are pulled as a complete new image and staged for the next boot. If anything goes wrong, the previous deployment is one reboot away.
-- **Vanilla KDE** — no opinionated theming, no custom greeter, no surprises. Just KDE Plasma on Wayland as it was meant to be.
-- **Apps via Flatpak, Toolbox, Distrobox, or Incus** — the immutable root means you install applications in their own isolated environments, not into the system. This keeps the base clean and your apps portable.
+- **Vanilla KDE** — no opinionated theming, no custom greeter, no surprises. Just KDE Plasma 6 on Wayland as it was meant to be.
+- **Apps via Flatpak, Toolbox, Distrobox, or Incus** — install applications in isolated environments rather than into the system root. The base stays clean, your apps stay portable.
 
 ---
 
@@ -27,7 +27,7 @@ Built on the [YoRHa](https://github.com/lcook/yorha) toolkit, Cache22 gives you 
 
 ### Desktop
 - KDE Plasma 6 (Wayland, default)
-- Plasma Login Manager with auto-login support
+- Plasma Login Manager
 - Full font support including CJK (Japanese, Chinese, Korean)
 - Fcitx5 with Mozc for Japanese input
 - Bluetooth, printing, and network shares out of the box
@@ -45,18 +45,10 @@ Built on the [YoRHa](https://github.com/lcook/yorha) toolkit, Cache22 gives you 
 - MangoHud
 - Full Vulkan support for AMD, Intel, and NVIDIA including 32-bit layers
 
-### Patches and Optimizations
-Cache22 ships patched versions of two key gaming packages:
-
-- **QEMU** — patched to add VAAPI hardware video transcoding support, custom refresh rate support with the SDL backend, and a higher polling rate for improved desktop responsiveness
-- **Gamescope** — patched to fix Steam Remote Play with NVIDIA GPUs
-
-These are provided via custom package repositories and updated independently of the base image.
-
-### Containers and Virtualization
+### Virtualization and Containers
 - Flatpak with Flathub pre-configured
 - Toolbox and Distrobox for mutable development containers
-- Incus and Incus UI for full virtual machine and container management
+- Incus and Incus UI for virtual machine and container management
 - QEMU/KVM with virt-manager
 
 ### Software Installation
@@ -72,63 +64,12 @@ The immutable root means you install software differently from a traditional dis
 
 You can also add [Homebrew](https://brew.sh) or [Nix](https://nixos.org) in your home directory for additional package management without touching the system root.
 
----
+### Patches and Optimizations
 
-## Optional Services
+Cache22 ships patched versions of two packages via custom repositories:
 
-Some included services are not enabled by default since they are not needed by all users. Enable only what you need.
-
-### Incus (Virtual Machines and Containers)
-
-Incus is included but not started by default:
-```bash
-sudo systemctl enable --now incus
-```
-
-After enabling, the Incus web UI is available at `https://localhost:8443`. You can manage VMs and containers either through the UI or via the `incus` command line tool.
-
-### supergfxctl (Hybrid Graphics / Laptop GPU Switching)
-
-If your laptop has hybrid graphics (e.g. an integrated Intel or AMD GPU alongside a discrete NVIDIA GPU), `supergfxctl` lets you switch between GPU modes:
-```bash
-sudo systemctl enable --now supergfxd
-```
-
-Once running, GPU mode can be switched from the system tray or via the command line:
-```bash
-supergfxctl --mode integrated   # battery saving, discrete GPU off
-supergfxctl --mode hybrid       # NVIDIA available on demand
-supergfxctl --mode dedicated    # always use NVIDIA
-```
-
-### Sunshine (Game Streaming)
-
-Sunshine is included for streaming games to Moonlight clients. Launch it when needed:
-```bash
-sunshine
-```
-
-The Sunshine web interface for configuration is available at `https://localhost:47990`. Add it to KDE autostart in System Settings if you want it running at login.
-
----
-
-## Deck Mode
-
-Cache22 includes a built-in gaming mode that boots directly into a Steam/Gamescope session, similar to SteamOS on the Steam Deck.
-
-**Enable deck mode:**
-```bash
-sudo c22-deck-enable
-sudo reboot
-```
-
-**Disable deck mode (return to KDE desktop):**
-```bash
-sudo c22-deck-disable
-sudo reboot
-```
-
-The script automatically detects your user and the correct Gamescope session. No configuration required.
+- **QEMU** — patched to add VAAPI hardware video transcoding support, custom refresh rate support with the SDL backend, and higher polling rate for improved desktop responsiveness
+- **Gamescope** — patched to fix Steam Remote Play with NVIDIA GPUs
 
 ---
 
@@ -156,28 +97,16 @@ The installer will guide you through:
 
 - Disk selection — wipe entire disk, use free space alongside existing partitions, or partition manually
 - Filesystem choice for `/var` — XFS (default) or Btrfs with optional subvolumes
-- Optional LUKS encryption for `/var` (user data — the root partition is public and immutable so encrypting it serves no purpose)
+- Optional LUKS encryption for `/var` (the root partition is public and immutable so encrypting it serves no purpose)
 - Timezone, locale, and hostname
 - Root password and first user account
-- Image source — pull from GHCR or use a locally built image
-
-### Secure Boot (optional, after first boot)
-
-Cache22 includes `sbctl` for Secure Boot key management. With Secure Boot **disabled** in your UEFI firmware:
-```bash
-sudo sbctl create-keys
-sudo sbctl enroll-keys --microsoft
-sudo sbctl sign -s /boot/efi/EFI/BOOT/BOOTX64.EFI
-sudo sbctl sign -s /boot/efi/EFI/grub/grubx64.efi 2>/dev/null || true
-```
-
-Then enable Secure Boot in your UEFI firmware and reboot. The `--microsoft` flag retains Microsoft's keys alongside yours for hardware compatibility. `c22-update` automatically re-signs EFI binaries after updates if sbctl is set up.
+- Image source — pull latest from GHCR or use a locally built image
 
 ---
 
 ## Updating
 
-New images are built automatically every week. To update your system:
+New images are built automatically every week. To update:
 ```bash
 sudo c22-update
 sudo reboot
@@ -187,7 +116,7 @@ The new image is pulled from GHCR, committed to the local OSTree repository, and
 
 ### Rolling Back
 
-If something goes wrong after an update, you have two options:
+If something goes wrong after an update:
 
 **From the running system:**
 ```bash
@@ -201,18 +130,77 @@ Select the previous deployment entry at boot. No commands needed.
 
 ---
 
-## Build Schedule
+## Deck Mode
 
-New images are published to `ghcr.io/cmspam/cache22/cachyos`:
+Cache22 includes a built-in gaming mode that boots directly into a Steam/Gamescope session, similar to SteamOS on the Steam Deck.
 
-- **Weekly** — every Friday at 19:00 UTC via GitHub Actions
-- **On every push** to the `main` branch
+**Enable deck mode:**
+```bash
+sudo c22-deck-enable
+sudo reboot
+```
+
+**Disable deck mode (return to KDE desktop):**
+```bash
+sudo c22-deck-disable
+sudo reboot
+```
+
+The script automatically detects your user and the correct Gamescope session. No configuration required.
+
+---
+
+## Secure Boot
+
+Cache22 includes `sbctl` for Secure Boot key management. With Secure Boot **disabled** in your UEFI firmware:
+```bash
+sudo sbctl create-keys
+sudo sbctl enroll-keys --microsoft
+sudo sbctl sign -s /boot/efi/EFI/BOOT/BOOTX64.EFI
+sudo sbctl sign -s /boot/efi/EFI/grub/grubx64.efi 2>/dev/null || true
+```
+
+Then enable Secure Boot in your UEFI firmware and reboot. The `--microsoft` flag retains Microsoft's keys for hardware compatibility. `c22-update` automatically re-signs EFI binaries after updates if sbctl is configured.
+
+---
+
+## Optional Services
+
+Some included services are not enabled by default. Enable only what you need.
+
+### Incus (Virtual Machines and Containers)
+```bash
+sudo systemctl enable --now incus
+```
+
+The Incus web UI is then available at `https://localhost:8443`.
+
+### supergfxctl (Hybrid Graphics / Laptop GPU Switching)
+
+For laptops with hybrid graphics (integrated + discrete NVIDIA GPU):
+```bash
+sudo systemctl enable --now supergfxd
+```
+
+Switch GPU modes via the system tray or command line:
+```bash
+supergfxctl --mode integrated   # battery saving, discrete GPU off
+supergfxctl --mode hybrid       # NVIDIA available on demand
+supergfxctl --mode dedicated    # always use NVIDIA
+```
+
+### Sunshine (Game Streaming)
+
+Sunshine is included for streaming to [Moonlight](https://moonlight-stream.org) clients. Enable it as a user service:
+```bash
+systemctl --user enable --now sunshine
+```
+
+The Sunshine configuration interface is available at `https://localhost:47990`.
 
 ---
 
 ## Building Locally
-
-To build your own image:
 ```bash
 git clone --recursive https://github.com/cmspam/cache22
 cd cache22
@@ -224,6 +212,8 @@ Deploy a locally built image from within a running Cache22 system:
 ```bash
 sudo yorha upgrade local
 ```
+
+New images are published to `ghcr.io/cmspam/cache22/cachyos` every Friday at 19:00 UTC and on every push to `main`.
 
 ---
 
