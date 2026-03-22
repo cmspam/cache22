@@ -89,12 +89,27 @@ _ostree_create_rootfs ()
   info "Container image root filesystem exported to $OSTREE_SYS_TREE"
 }
 
+_ostree_preserve_fstab ()
+{
+  # fstab is machine-specific and is absent from the container image, so
+  # OSTree's 3-way merge has no base to work from and leaves it blank.
+  # Copy it from the live /etc into the new tree's usr/etc before committing,
+  # so the correct fstab is present as the baseline in the new deployment.
+  if [ -s /etc/fstab ]; then
+    info "Preserving /etc/fstab from current deployment..."
+    cp /etc/fstab "$OSTREE_SYS_TREE/usr/etc/fstab"
+  else
+    warn "No fstab found in running system — skipping fstab preservation"
+  fi
+}
+
 _ostree_create_layout ()
 {
   info "Creating OSTree filesystem layout in $OSTREE_SYS_TREE..."
 
   touch "$OSTREE_SYS_TREE/etc/machine-id"
   run mv "$OSTREE_SYS_TREE/etc" "$OSTREE_SYS_TREE/usr/"
+  _ostree_preserve_fstab
   run rm -r "$OSTREE_SYS_TREE/home"
   run ln -s /var/home "$OSTREE_SYS_TREE/home"
   run ln -s /var/scratch "$OSTREE_SYS_TREE/scratch"
