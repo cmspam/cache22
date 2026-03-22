@@ -560,9 +560,6 @@ do_install() {
     info "Creating OSTree filesystem layout..."
     _create_ostree_layout
 
-    # Write machine-specific /etc files before commit
-    _write_etc_files
-
     # Commit to OSTree
     info "Committing rootfs to OSTree..."
     ostree commit \
@@ -595,6 +592,12 @@ do_install() {
         --retain \
         cache22/x86_64/standard \
         2>&1 | grep -v "grub2-mkconfig\|Bootloader write" || true
+
+    # Write machine-specific files into the deployment's live /etc.
+    # This must happen AFTER ostree admin deploy so they are treated as
+    # user modifications to the live /etc, not part of the image baseline.
+    # OSTree's 3-way merge will then carry them forward on every upgrade.
+    _write_etc_files
 
     # Install GRUB and generate config
     _install_grub "$dev" "$part_root"
@@ -687,10 +690,20 @@ TMPFILES
 }
 
 # ─────────────────────────────────────────────
-# Write machine-specific /etc into rootfs
+# Write machine-specific /etc into deployment
 # ─────────────────────────────────────────────
 _write_etc_files() {
-    local etc="/mnt/setup/rootfs/usr/etc"
+    # Target the deployment's live /etc, NOT usr/etc in the rootfs.
+    # Writing here means OSTree sees these as user modifications to the
+    # live /etc, so the 3-way merge will carry them forward on every
+    # subsequent upgrade automatically.
+    local deploy
+    deploy=$(ls -d /mnt/ostree/deploy/cache22/deploy/*.0 2>/dev/null         | grep -v origin | head -1)
+    [[ -z "$deploy" ]] && error "Could not find OSTree deployment directory for /etc writes"
+
+    local etc="$deploy/etc"
+
+    info "Writing machine-specific configuration to deployment /etc..."
 
     # Hostname
     echo "$HOSTNAME" > "$etc/hostname"
@@ -717,11 +730,8 @@ _write_etc_files() {
         fi
 
         if [[ "$VAR_FS" == "btrfs" && "$BTRFS_SUBVOLS" == true ]]; then
-            # Root subvolume @ mounted at /var
             echo "${var_dev}  /var       btrfs  rw,noatime,compress=zstd,subvol=/@       0 2"
-            # @home subvolume
             echo "${var_dev}  /var/home  btrfs  rw,noatime,compress=zstd,subvol=/@home   0 2"
-            # @log subvolume — nodatacow for log files
             echo "${var_dev}  /var/log   btrfs  rw,noatime,nodatacow,subvol=/@log        0 2"
         elif [[ "$VAR_FS" == "btrfs" ]]; then
             echo "${var_dev}  /var       btrfs  rw,noatime,compress=zstd                 0 2"
@@ -730,10 +740,12 @@ _write_etc_files() {
         fi
     } > "$etc/fstab"
 
-    # crypttab — only needed if LUKS encrypted
+    # crypttab — only written for encrypted installs
     if [[ "$ENCRYPT_VAR" == true ]]; then
         echo "sys_var  LABEL=SYS_VAR_CRYPT  none  luks,timeout=90" > "$etc/crypttab"
     fi
+
+    success "Machine-specific /etc files written"
 }
 
 # ─────────────────────────────────────────────
