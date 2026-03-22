@@ -28,9 +28,9 @@ RUN pacman-key --init && pacman-key --populate archlinux cachyos && \
         dosfstools xfsprogs \
         grub mkinitcpio efibootmgr \
         ostree skopeo podman which \
-        nano vim git wget curl htop jq \
+        nano vim git wget curl htop jq sbctl \
         man-db man-pages bash-completion \
-        usbutils pciutils inetutils \
+        usbutils pciutils inetutils bolt \
         openssh rsync zip unzip p7zip \
         exfatprogs udisks2 && \
     { \

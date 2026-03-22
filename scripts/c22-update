@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+set -e
+
+if [[ $EUID -ne 0 ]]; then
+    echo "Run with sudo"
+    exit 1
+fi
+
+yorha upgrade remote
+
+# Re-sign EFI binaries if sbctl is set up
+if sbctl status 2>/dev/null | grep -q "Installed: ✓"; then
+    echo "==> Re-signing EFI binaries with sbctl..."
+    sbctl sign-all
+fi
+
+echo "==> Update complete. Reboot to use the new deployment."
+echo "    Run: sudo yorha deployment list — to see available deployments."
