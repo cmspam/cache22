@@ -92,7 +92,7 @@ RUN printf '[qemu-patched-v3]\nSigLevel = Optional\nServer = https://github.com/
         lib32-vulkan-radeon lib32-vulkan-intel \
         toolbox distrobox incus incus-tools incus-ui \
         supergfxctl \
-        cachyos-gaming-applications gamescope-session-cachyos \
+        cachyos-gaming-applications gamescope-session-cachyos sunshine \
         qemu-desktop \
         fcitx5 fcitx5-mozc fcitx5-qt fcitx5-gtk fcitx5-configtool \
         fcitx5-chinese-addons && \
