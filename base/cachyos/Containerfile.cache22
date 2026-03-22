@@ -43,13 +43,12 @@ RUN git clone https://github.com/dlundqvist/xone.git /tmp/xone-src --branch v0.5
 
 FROM $IMAGE:latest
 
-# Install AUR packages from builder stage
+# ── Layer 1: AUR packages and kernel modules (changes only when AUR packages update) ──
 COPY --from=builder /tmp/ntfsprogs-plus/*.pkg.tar.zst /tmp/aur/
 COPY --from=builder /tmp/xone-dongle-firmware/*.pkg.tar.zst /tmp/aur/
 RUN pacman --noconfirm --needed -U /tmp/aur/*.pkg.tar.zst && \
     rm -rf /tmp/aur
 
-# Install kernel modules from builder stage
 COPY --from=builder /tmp/modules /usr/lib/modules/
 COPY --from=builder /tmp/ntfsplus-dkms-git-aur/00-ntfsplus.conf \
     /etc/modprobe.d/00-ntfsplus.conf
@@ -60,12 +59,15 @@ COPY --from=builder /tmp/xone-src/install/modprobe.conf \
 
 RUN KVER=$(ls /usr/lib/modules/) && depmod -a ${KVER}
 
+# ── Layer 2: Custom repos setup (changes only when repo URLs change) ──
 RUN printf '[qemu-patched-v3]\nSigLevel = Optional\nServer = https://github.com/cmspam/qemu-patched/releases/download/latest-v3\n\n[gamescope-patched-v3]\nSigLevel = Optional\nServer = https://github.com/cmspam/gamescope-patched/releases/download/latest-v3\n' > /etc/pacman.d/cache22-repos && \
     sed -i 's|# REPOSITORIES|# REPOSITORIES\nInclude = /etc/pacman.d/cache22-repos|' /etc/pacman.conf && \
     pacman --noconfirm -Sy && \
     pacman --noconfirm -Rdd iptables || true && \
-    pacman --noconfirm --needed -S \
-        iptables-nft \
+    pacman --noconfirm --needed -S iptables-nft
+
+# ── Layer 3: KDE desktop and audio (changes when KDE or audio packages update) ──
+RUN pacman --noconfirm --needed -S \
         plasma-meta plasma-login-manager \
         xdg-desktop-portal-kde xorg-xwayland \
         dolphin konsole ark gwenview spectacle okular kate \
@@ -76,26 +78,7 @@ RUN printf '[qemu-patched-v3]\nSigLevel = Optional\nServer = https://github.com/
         pipewire pipewire-alsa pipewire-audio pipewire-jack \
         pipewire-pulse wireplumber gst-plugin-pipewire \
         bluez bluez-utils \
-        cups print-manager \
-        noto-fonts noto-fonts-cjk noto-fonts-emoji noto-fonts-extra \
-        ttf-liberation ttf-dejavu \
-        adobe-source-han-sans-jp-fonts \
-        adobe-source-han-sans-cn-fonts \
-        adobe-source-han-sans-kr-fonts \
-        gvfs gvfs-mtp gvfs-smb gvfs-nfs \
-        flatpak bazaar \
-        mesa-git \
-        intel-media-driver libvpl vpl-gpu-rt \
-        linux-cachyos-nvidia-open nvidia-utils nvidia-settings \
-        egl-wayland libva-nvidia-driver \
-        vulkan-icd-loader lib32-vulkan-icd-loader \
-        lib32-vulkan-radeon lib32-vulkan-intel \
-        toolbox distrobox incus incus-tools incus-ui \
-        supergfxctl plasma6-applets-supergfxctl \
-        cachyos-gaming-applications gamescope-session-cachyos sunshine \
-        qemu-desktop \
-        fcitx5 fcitx5-mozc fcitx5-qt fcitx5-gtk fcitx5-configtool \
-        fcitx5-chinese-addons && \
+        cups print-manager && \
     systemctl enable plasmalogin.service && \
     systemctl enable power-profiles-daemon.service && \
     systemctl enable bluetooth.service && \
@@ -103,11 +86,51 @@ RUN printf '[qemu-patched-v3]\nSigLevel = Optional\nServer = https://github.com/
     systemctl --global enable \
         pipewire.service pipewire.socket \
         pipewire-pulse.service pipewire-pulse.socket \
-        wireplumber.service && \
+        wireplumber.service
+
+# ── Layer 4: Fonts and input methods (rarely changes) ──
+RUN pacman --noconfirm --needed -S \
+        noto-fonts noto-fonts-cjk noto-fonts-emoji noto-fonts-extra \
+        ttf-liberation ttf-dejavu \
+        adobe-source-han-sans-jp-fonts \
+        adobe-source-han-sans-cn-fonts \
+        adobe-source-han-sans-kr-fonts \
+        fcitx5 fcitx5-mozc fcitx5-qt fcitx5-gtk fcitx5-configtool \
+        fcitx5-chinese-addons && \
+    rm -f /etc/xdg/autostart/org.fcitx.Fcitx5.desktop && \
+    mkdir -p /etc/environment.d && \
+    { \
+        echo "XMODIFIERS=@im=fcitx"; \
+        echo "QT_IM_MODULE=fcitx"; \
+        echo "GTK_IM_MODULE=fcitx"; \
+    } > /etc/environment.d/fcitx5.conf
+
+# ── Layer 5: GPU drivers and Vulkan (changes when mesa/nvidia update) ──
+RUN pacman --noconfirm --needed -S \
+        mesa-git \
+        intel-media-driver libvpl vpl-gpu-rt \
+        linux-cachyos-nvidia-open nvidia-utils nvidia-settings \
+        egl-wayland libva-nvidia-driver \
+        vulkan-icd-loader lib32-vulkan-icd-loader \
+        lib32-vulkan-radeon lib32-vulkan-intel \
+        gvfs gvfs-mtp gvfs-smb gvfs-nfs
+
+# ── Layer 6: Gaming (changes when Steam/gamescope/etc update) ──
+RUN pacman --noconfirm --needed -S \
+        cachyos-gaming-applications gamescope-session-cachyos sunshine \
+        supergfxctl plasma6-applets-supergfxctl
+
+# ── Layer 7: Virtualization and containers (changes occasionally) ──
+RUN pacman --noconfirm --needed -S \
+        toolbox distrobox incus incus-tools incus-ui \
+        qemu-desktop \
+        flatpak bazaar && \
     sed -i "s|^## distro =.*|distro = \"arch\"|" /etc/containers/toolbox.conf && \
     flatpak remote-add --if-not-exists flathub \
-        https://dl.flathub.org/repo/flathub.flatpakrepo && \
-    echo "%wheel ALL=(ALL) ALL" > /etc/sudoers.d/10-wheel && \
+        https://dl.flathub.org/repo/flathub.flatpakrepo
+
+# ── Layer 8: System configuration (changes with repo/config updates) ──
+RUN echo "%wheel ALL=(ALL) ALL" > /etc/sudoers.d/10-wheel && \
     echo "%wheel ALL=NOPASSWD: /usr/bin/ostree" > /etc/sudoers.d/20-ostree && \
     { \
         echo "Cmnd_Alias YORHA = /usr/bin/yorha \"\",/usr/bin/yorha compose *,/usr/bin/yorha upgrade *,/usr/bin/yorha deployment *"; \
@@ -130,15 +153,9 @@ RUN printf '[qemu-patched-v3]\nSigLevel = Optional\nServer = https://github.com/
         echo "modprobe.blacklist=nouveau"; \
         echo "rd.driver.blacklist=nouveau"; \
     } > /usr/share/cache22/.karg && \
-    mkdir -p /etc/environment.d && \
-    { \
-        echo "XMODIFIERS=@im=fcitx"; \
-        echo "QT_IM_MODULE=fcitx"; \
-        echo "GTK_IM_MODULE=fcitx"; \
-    } > /etc/environment.d/fcitx5.conf && \
-    rm -f /etc/xdg/autostart/org.fcitx.Fcitx5.desktop && \
     pacman -Scc --noconfirm
 
+# ── Layer 9: Yorha tooling and scripts (changes with repo commits) ──
 COPY yorha /usr/bin/yorha
 COPY base /usr/share/cache22/base
 COPY libexec /usr/libexec
@@ -157,7 +174,8 @@ RUN sed -i "s|libexec|/usr/libexec|" /usr/bin/yorha && \
         /usr/libexec/yorha-config && \
     sed -i "s|GH_PROJECT:-yorha|GH_PROJECT:-cache22|" \
         /usr/libexec/yorha-config && \
-    chmod +x /usr/bin/c22-deck-enable /usr/bin/c22-deck-disable /usr/bin/c22-update /usr/bin/c22-setup-secureboot && \
+    chmod +x /usr/bin/c22-deck-enable /usr/bin/c22-deck-disable \
+              /usr/bin/c22-update /usr/bin/c22-setup-secureboot && \
     IMAGE=$(echo $IMAGE | sed "s|-base||") && \
     DATE=$(date +%Y%m%d.%H%M) && \
     { \
