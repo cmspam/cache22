@@ -6,12 +6,37 @@ if [[ $EUID -ne 0 ]]; then
     exit 1
 fi
 
+IMAGE="ghcr.io/cmspam/cache22/cachyos:latest"
+
+# ── Save the current cache22 image ID so we can remove it after the pull ──
+_old_image_id=$(podman inspect --format '{{.Id}}' "$IMAGE" 2>/dev/null || true)
+
+# ── Pull and deploy the new image ──
 yorha upgrade remote
 
-# Re-sign EFI binaries if sbctl is set up
+# ── Re-sign EFI binaries if sbctl is set up ──
 if sbctl status 2>/dev/null | grep -q "Installed: ✓"; then
     echo "==> Re-signing EFI binaries with sbctl..."
     sbctl sign-all
+fi
+
+# ── Remove the old cache22 image if it was replaced ──
+# Only removes the specific old cache22 image by ID, leaving any images
+# the user has pulled with podman completely untouched.
+if [[ -n "$_old_image_id" ]]; then
+    _new_image_id=$(podman inspect --format '{{.Id}}' "$IMAGE" 2>/dev/null || true)
+    if [[ "$_old_image_id" != "$_new_image_id" ]]; then
+        echo "==> Removing previous cache22 image..."
+        podman rmi -f "$_old_image_id" 2>/dev/null || true
+    fi
+fi
+
+# ── Prune OSTree deployments down to two ──
+# Keeps the currently booted deployment and one rollback.
+_deployment_count=$(ostree admin status | grep -c "^\*\? " 2>/dev/null || echo 0)
+if [[ "$_deployment_count" -gt 2 ]]; then
+    echo "==> Pruning old OSTree deployments (keeping 2)..."
+    ostree admin cleanup
 fi
 
 echo "==> Update complete. Reboot to use the new deployment."
