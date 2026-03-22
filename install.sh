@@ -768,6 +768,8 @@ _install_grub() {
         --removable \
         --boot-directory=/boot/efi/EFI \
         --bootloader-id=cache22 \
+        --modules="tpm" \
+        --disable-shim-lock \
         "$dev" || warn "grub-install completed with warnings (usually ok)"
 
     chroot "$deploy" grub-mkconfig -o /boot/efi/EFI/grub/grub.cfg

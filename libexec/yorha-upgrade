@@ -167,7 +167,7 @@ _ostree_install_bootloader ()
 {
   info "Installing and configuring GRUB bootloader for OSTree deployment..."
 
-  run grub-install --target=x86_64-efi --efi-directory="$OSTREE_SYS_ROOT/boot/efi" --removable --boot-directory="$OSTREE_SYS_ROOT/boot/efi/EFI" --bootloader-id="$OSTREE_STATEROOT" "$OSTREE_DEV_BOOT"
+  run grub-install --target=x86_64-efi --efi-directory="$OSTREE_SYS_ROOT/boot/efi" --removable --boot-directory="$OSTREE_SYS_ROOT/boot/efi/EFI" --bootloader-id="$OSTREE_STATEROOT" --modules="tpm" --disable-shim-lock "$OSTREE_DEV_BOOT"
 
   export OSTREE_SYS_PATH=$(find "$OSTREE_SYS_ROOT/ostree/deploy/$OSTREE_STATEROOT/deploy" -maxdepth 1 -mindepth 1 -type d)
   run rm -rf "$OSTREE_SYS_PATH/boot/"*
@@ -175,14 +175,14 @@ _ostree_install_bootloader ()
   run mount --mkdir --rbind "$OSTREE_SYS_ROOT/boot" "$OSTREE_SYS_PATH/boot"
   run mount --mkdir --rbind "$OSTREE_SYS_ROOT/ostree" "$OSTREE_SYS_PATH/sysroot/ostree"
   for _dev in /dev /proc /sys; do run mount -o bind "$_dev" "$OSTREE_SYS_PATH$_dev"; done
-  
+
   run chroot "$OSTREE_SYS_PATH" /bin/bash -c "grub-mkconfig -o /boot/efi/EFI/grub/grub.cfg"
   run rm -rf "$OSTREE_SYS_SETUP"
- 
+
   run umount -R "$OSTREE_SYS_ROOT"
 }
 
-usage_upgrade () 
+usage_upgrade ()
 {
 cat <<EOF
 Usage:
@@ -211,17 +211,17 @@ main_upgrade ()
       elif [ $# -gt 1 ] && ! echo "$_base" | grep -q localhost; then
         error "\`local\` upgrade operation only compatible with a local registry"
       fi
-      
+
       priv_check "$_sub"
 
       [ -n "$_flavor" ] && OCI_TAG="$OCI_TAG-$_flavor"
       [ $# -gt 1 ] && OCI_TAG="$_base"
-     
+
       if ! $_runtime image exists "$OCI_TAG"; then
          [ -n "$_flavor" ] && [ $# -eq 1 ] && error "$OCI_TAG image flavor not found in local storage. Ensure the image has been built using \`$(basename "$0") compose flavor [\$base-\$flavor]" \
            || error "$OCI_TAG image not found in local storage. Ensure the image have been built using \`$(basename "$0") compose container\`"
-      fi 
-    
+      fi
+
       ! $_runtime image exists "$OCI_TAG-base" && [ $# -eq 1 ] && error "$OCI_TAG-base base image not found in local storage. Ensure the image has bene built using \`$(basename "$0") compose container-base\`"
 
       ostree_upgrade "$_runtime" "$OCI_TAG" ;;

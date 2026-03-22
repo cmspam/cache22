@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+set -e
+
+if [[ $EUID -ne 0 ]]; then
+    echo "Run with sudo"
+    exit 1
+fi
+
+echo "==> Cache22 Secure Boot Setup"
+echo ""
+
+# Check sbctl is available
+if ! command -v sbctl &>/dev/null; then
+    echo "ERROR: sbctl not found. It should be installed in the base image."
+    exit 1
+fi
+
+# Check current status
+echo "==> Current Secure Boot status:"
+sbctl status
+echo ""
+
+# Check we're in setup mode
+if ! sbctl status 2>/dev/null | grep -q "Setup Mode:.*Enabled"; then
+    echo "ERROR: Not in Setup Mode."
+    echo ""
+    echo "To enter Setup Mode:"
+    echo "  1. Reboot into your UEFI firmware settings"
+    echo "  2. Find the Secure Boot section"
+    echo "  3. Select 'Clear Secure Boot Keys' or 'Reset to Setup Mode'"
+    echo "  4. Save and boot back into Cache22"
+    echo "  5. Run this script again"
+    exit 1
+fi
+
+# Create keys
+echo "==> Creating Secure Boot keys..."
+sbctl create-keys
+
+# Enroll keys
+echo "==> Enrolling keys (keeping Microsoft certificates for hardware compatibility)..."
+sbctl enroll-keys --microsoft
+
+# Sign bootloader
+echo "==> Signing GRUB EFI binaries..."
+sbctl sign -s /boot/efi/EFI/BOOT/BOOTX64.EFI
+sbctl sign -s /boot/efi/EFI/grub/x86_64-efi/grub.efi  2>/dev/null || true
+sbctl sign -s /boot/efi/EFI/grub/x86_64-efi/core.efi  2>/dev/null || true
+
+# Sign all kernels in OSTree boot directory
+echo "==> Signing kernels..."
+find /boot/ostree -name "vmlinuz*" -exec sbctl sign -s {} \;
+
+# Final sign-all to catch anything missed
+sbctl sign-all
+
+# Verify
+echo ""
+echo "==> Verification:"
+sbctl verify
+echo ""
+
+echo "==> Secure Boot setup complete!"
+echo ""
+echo "    Next steps:"
+echo "    1. Reboot into your UEFI firmware settings"
+echo "    2. Enable Secure Boot"
+echo "    3. Save and reboot"
+echo "    4. Verify with: sbctl status"
+echo ""
+echo "    Future updates via 'sudo c22-update' will re-sign automatically."

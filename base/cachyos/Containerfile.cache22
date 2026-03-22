@@ -145,6 +145,7 @@ COPY libexec /usr/libexec
 COPY scripts/c22-deck-enable /usr/bin/c22-deck-enable
 COPY scripts/c22-deck-disable /usr/bin/c22-deck-disable
 COPY scripts/c22-update /usr/bin/c22-update
+COPY scripts/c22-setup-secureboot /usr/bin/c22-setup-secureboot
 
 ARG IMAGE
 RUN sed -i "s|libexec|/usr/libexec|" /usr/bin/yorha && \
@@ -156,7 +157,7 @@ RUN sed -i "s|libexec|/usr/libexec|" /usr/bin/yorha && \
         /usr/libexec/yorha-config && \
     sed -i "s|GH_PROJECT:-yorha|GH_PROJECT:-cache22|" \
         /usr/libexec/yorha-config && \
-    chmod +x /usr/bin/c22-deck-enable /usr/bin/c22-deck-disable /usr/bin/c22-update && \
+    chmod +x /usr/bin/c22-deck-enable /usr/bin/c22-deck-disable /usr/bin/c22-update /usr/bin/c22-setup-secureboot && \
     IMAGE=$(echo $IMAGE | sed "s|-base||") && \
     DATE=$(date +%Y%m%d.%H%M) && \
     { \
