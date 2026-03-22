@@ -1,5 +1,31 @@
 # Cache22 Package Changelog
 
+## 2026-03-22 20:10 UTC
+
+### Updated
+
+| Package | From | To |
+|---------|------|----|
+| `enchant` | 2.8.15-1.1 | 2.8.15-2.1 |
+| `frameworkintegration` | 6.24.0-1.1 | 6.24.0-2.1 |
+| `lib32-ncurses` | 6.6-1 | 6.6-2 |
+| `libmodplug` | 0.8.9.0-6.1 | 0.8.9.0-7.1 |
+| `m4` | 1.4.21-1.1 | 1.4.21-2.1 |
+| `ncurses` | 6.6-1.1 | 6.6-2.1 |
+| `proton-cachyos-slr` | 1:10.0.20260319-1 | 1:10.0.20260320-1 |
+| `python-six` | 1.17.0-2 | 1.17.0-3 |
+
+### Added
+
+| Package | Version |
+|---------|--------|
+| `btop` | 1.4.6-1.1 |
+| `github-cli` | 2.88.1-1.1 |
+| `iperf3` | 3.20-1.1 |
+| `lksctp-tools` | 1.0.21-1.3 |
+| `mailcap` | 2.1.54-2 |
+| `wireguard-tools` | 1.0.20260223-1.1 |
+
 ## 2026-03-22 08:04 UTC
 
 ### Updated
