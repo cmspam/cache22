@@ -32,13 +32,7 @@ RUN pacman-key --init && pacman-key --populate archlinux cachyos && \
         man-db man-pages bash-completion \
         usbutils pciutils inetutils bolt \
         openssh rsync zip unzip p7zip \
-        exfatprogs btrfs-progs udisks2 && \
-    { \
-        echo "LABEL=SYS_ROOT /         auto  rw,relatime 0 1"; \
-        echo "LABEL=SYS_VAR  /var      auto  rw,relatime 0 2"; \
-        echo "LABEL=SYS_BOOT /boot/efi vfat  rw,relatime,fmask=0022,dmask=0022,codepage=437,iocharset=ascii,shortname=mixed,utf8,errors=remount-ro 0 2"; \
-    } > /etc/fstab && \
-    echo "root:cache22" | chpasswd
+        exfatprogs btrfs-progs udisks2
 
 RUN moduledir=$(find /usr/lib/modules -mindepth 1 -maxdepth 1 -type d) && \
     kernel=$(cat ${moduledir}/pkgbase) && \
