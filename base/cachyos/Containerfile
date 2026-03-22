@@ -28,11 +28,11 @@ RUN pacman-key --init && pacman-key --populate archlinux cachyos && \
         dosfstools xfsprogs \
         grub mkinitcpio efibootmgr \
         ostree skopeo podman which \
-        nano vim git wget curl htop jq sbctl \
+        nano vim git gh wget curl htop btop jq sbctl \
         man-db man-pages bash-completion \
         usbutils pciutils inetutils bolt \
         openssh rsync zip unzip p7zip \
-        exfatprogs btrfs-progs udisks2
+        exfatprogs btrfs-progs udisks2 wireguard-tools iperf3
 
 RUN moduledir=$(find /usr/lib/modules -mindepth 1 -maxdepth 1 -type d) && \
     kernel=$(cat ${moduledir}/pkgbase) && \
