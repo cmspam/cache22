@@ -17,6 +17,10 @@ env:
 jobs:
   build-publish:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+
     steps:
       - name: Free disk space
         uses: jlumbroso/free-disk-space@main
@@ -35,7 +39,8 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-            submodules: recursive
+          token: ${{ secrets.GITHUB_TOKEN }}
+          submodules: recursive
 
       - name: Login to registry
         run: echo "${{ secrets.GITHUB_TOKEN }}" | podman login --username "${{ github.actor }}" --password-stdin $OCI_REGISTRY
@@ -48,3 +53,96 @@ jobs:
           ./yorha compose container
           for _image in $OCI_REGISTRY/$GH_ACCOUNT/$GH_PROJECT/$DEFAULT_BASE-base \
             $OCI_REGISTRY/$GH_ACCOUNT/$GH_PROJECT/$DEFAULT_BASE; do podman push $_image; done
+
+      - name: Generate package list and changelog
+        run: |
+          DATE=$(date +%Y-%m-%d)
+          BUILD_DATE=$(date +%Y%m%d.%H%M)
+
+          # Get current package list from the built image
+          podman run --rm --entrypoint /bin/bash \
+            $OCI_REGISTRY/$GH_ACCOUNT/$GH_PROJECT/$DEFAULT_BASE:latest \
+            -c "pacman -Q" | sort > /tmp/packages-new.txt
+
+          # Compare with previous package list if it exists
+          if [ -f packages.txt ]; then
+            cp packages.txt /tmp/packages-old.txt
+          else
+            touch /tmp/packages-old.txt
+          fi
+
+          # Generate changelog
+          python3 << 'PYEOF'
+          import re
+          from datetime import datetime
+
+          with open('/tmp/packages-old.txt') as f:
+              old = {line.split()[0]: line.split()[1] for line in f if line.strip()}
+
+          with open('/tmp/packages-new.txt') as f:
+              new = {line.split()[0]: line.split()[1] for line in f if line.strip()}
+
+          added   = {k: new[k] for k in new if k not in old}
+          removed = {k: old[k] for k in old if k not in new}
+          changed = {k: (old[k], new[k]) for k in new if k in old and old[k] != new[k]}
+
+          date = datetime.now().strftime('%Y-%m-%d %H:%M UTC')
+
+          # Read existing changelog
+          try:
+              with open('CHANGELOG.md') as f:
+                  existing = f.read()
+          except FileNotFoundError:
+              existing = ''
+
+          # Build new entry
+          entry = f'## {date}\n\n'
+
+          if not added and not removed and not changed:
+              entry += '_No package changes in this build._\n\n'
+          else:
+              if changed:
+                  entry += '### Updated\n\n'
+                  entry += '| Package | From | To |\n'
+                  entry += '|---------|------|----|\n'
+                  for pkg in sorted(changed):
+                      entry += f'| `{pkg}` | {changed[pkg][0]} | {changed[pkg][1]} |\n'
+                  entry += '\n'
+
+              if added:
+                  entry += '### Added\n\n'
+                  entry += '| Package | Version |\n'
+                  entry += '|---------|--------|\n'
+                  for pkg in sorted(added):
+                      entry += f'| `{pkg}` | {added[pkg]} |\n'
+                  entry += '\n'
+
+              if removed:
+                  entry += '### Removed\n\n'
+                  entry += '| Package | Version |\n'
+                  entry += '|---------|--------|\n'
+                  for pkg in sorted(removed):
+                      entry += f'| `{pkg}` | {removed[pkg]} |\n'
+                  entry += '\n'
+
+          # Prepend to changelog
+          header = '# Cache22 Package Changelog\n\n'
+          if existing.startswith(header):
+              existing = existing[len(header):]
+
+          with open('CHANGELOG.md', 'w') as f:
+              f.write(header + entry + existing)
+
+          print(f"Changes: {len(changed)} updated, {len(added)} added, {len(removed)} removed")
+          PYEOF
+
+          # Save new package list
+          cp /tmp/packages-new.txt packages.txt
+
+      - name: Commit package list and changelog
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add packages.txt CHANGELOG.md
+          git diff --staged --quiet || git commit -m "chore: update package list and changelog [skip ci]"
+          git push
