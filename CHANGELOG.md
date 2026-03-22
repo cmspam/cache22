@@ -1,5 +1,19 @@
 # Cache22 Package Changelog
 
+## 2026-03-22 08:04 UTC
+
+### Updated
+
+| Package | From | To |
+|---------|------|----|
+| `btrfs-progs` | 6.19-1 | 6.19.1-1 |
+
+### Added
+
+| Package | Version |
+|---------|--------|
+| `gnu-free-fonts` | 20120503-9 |
+
 ## 2026-03-22 06:57 UTC
 
 ### Added
