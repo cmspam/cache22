@@ -96,7 +96,7 @@ sudo ./install.sh
 The installer will guide you through:
 
 - Disk selection — wipe entire disk, use free space alongside existing partitions, or partition manually
-- Filesystem choice for `/var` — XFS (default) or Btrfs with optional subvolumes
+- Filesystem choice for `/var` — XFS (default) or Btrfs with optional subvolumes (`@`, `@home`, `@log`)
 - Optional LUKS encryption for `/var` (the root partition is public and immutable so encrypting it serves no purpose)
 - Timezone, locale, and hostname
 - Root password and first user account
@@ -152,15 +152,33 @@ The script automatically detects your user and the correct Gamescope session. No
 
 ## Secure Boot
 
-Cache22 includes `sbctl` for Secure Boot key management. With Secure Boot **disabled** in your UEFI firmware:
+Cache22 supports Secure Boot using your own keys via `sbctl`. A guided setup script is included.
+
+### Setup
+
+First, enter Setup Mode in your UEFI firmware — this clears existing Secure Boot keys and allows enrolling new ones. The option is usually called "Clear Secure Boot Keys" or "Reset to Setup Mode". Secure Boot should be **disabled** at this point.
+
+Boot into Cache22 and run:
 ```bash
-sudo sbctl create-keys
-sudo sbctl enroll-keys --microsoft
-sudo sbctl sign -s /boot/efi/EFI/BOOT/BOOTX64.EFI
-sudo sbctl sign -s /boot/efi/EFI/grub/grubx64.efi 2>/dev/null || true
+sudo c22-setup-secureboot
 ```
 
-Then enable Secure Boot in your UEFI firmware and reboot. The `--microsoft` flag retains Microsoft's keys for hardware compatibility. `c22-update` automatically re-signs EFI binaries after updates if sbctl is configured.
+The script will:
+1. Verify you are in Setup Mode
+2. Generate your personal Secure Boot keys
+3. Enroll them alongside Microsoft's certificates (required for hardware compatibility on most systems)
+4. Sign the GRUB EFI binaries
+5. Sign all kernels in the OSTree boot directory
+6. Verify everything is correctly signed
+
+Then reboot into your UEFI firmware, enable Secure Boot, save and reboot. Verify it worked:
+```bash
+sbctl status
+```
+
+### Staying signed after updates
+
+`c22-update` automatically re-signs all registered EFI binaries and kernels after each update if sbctl is configured. No manual action required.
 
 ---
 
