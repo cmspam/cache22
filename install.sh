@@ -36,8 +36,9 @@ ROOT_PASS=""
 USERNAME=""
 USER_PASS=""
 IMAGE="ghcr.io/cmspam/cache22/cachyos:latest"
-DISK_MODE=""   # wipe | freespace | manual
+DISK_MODE=""
 BTRFS_SUBVOLS=false
+VAR_DEVICE=""  # final device to mount for /var (mapper or raw)
 
 # ─────────────────────────────────────────────
 # 1. PREFLIGHT
@@ -46,7 +47,6 @@ preflight() {
     info "Running preflight checks..."
 
     [[ $EUID -ne 0 ]] && error "Must be run as root"
-
     [[ ! -d /sys/firmware/efi ]] && error "UEFI boot required. Not running in UEFI mode."
 
     if ! ping -c1 -W3 archlinux.org &>/dev/null; then
@@ -57,8 +57,7 @@ preflight() {
     pacman -Sy --noconfirm --needed \
         ostree podman git libnewt \
         dosfstools xfsprogs btrfs-progs \
-        cryptsetup parted util-linux \
-        whiptail 2>/dev/null || true
+        cryptsetup parted util-linux 2>/dev/null || true
 
     success "Preflight complete"
 }
@@ -69,17 +68,14 @@ preflight() {
 select_disk() {
     info "Scanning disks..."
 
-    # Build list of disks using by-id paths
     local disk_list=()
     while IFS= read -r byid_path; do
         local dev
         dev=$(readlink -f "$byid_path")
-        # Skip partitions
-        [[ "$dev" =~ [0-9]p[0-9]+$ ]] && continue
-        [[ "$dev" =~ [0-9]+$ && ! "$dev" =~ nvme ]] && continue
-        local size
+        [[ "$dev" =~ p[0-9]+$ ]] && continue
+        [[ "$dev" =~ [^0-9][0-9]+$ && ! "$dev" =~ nvme ]] && continue
+        local size model
         size=$(lsblk -dno SIZE "$dev" 2>/dev/null || echo "?")
-        local model
         model=$(lsblk -dno MODEL "$dev" 2>/dev/null | xargs || echo "")
         disk_list+=("$byid_path" "$model $size")
     done < <(ls /dev/disk/by-id/ | grep -v -- '-part' | sed 's|^|/dev/disk/by-id/|')
@@ -94,7 +90,6 @@ select_disk() {
     dev=$(readlink -f "$DISK_BY_ID")
     info "Selected: $DISK_BY_ID → $dev"
 
-    # Show current partition layout
     whiptail --title "Current layout of $dev" \
         --msgbox "$(lsblk -o NAME,SIZE,FSTYPE,LABEL,MOUNTPOINT "$dev" 2>/dev/null)" \
         20 78 || true
@@ -118,9 +113,6 @@ select_disk_mode() {
     esac
 }
 
-# ─────────────────────────────────────────────
-# Wipe mode
-# ─────────────────────────────────────────────
 disk_mode_wipe() {
     local dev
     dev=$(readlink -f "$DISK_BY_ID")
@@ -128,7 +120,6 @@ disk_mode_wipe() {
     confirm "WARNING: ALL data on $dev will be permanently erased. Continue?" \
         || error "Aborted by user"
 
-    # Partition sizes
     local boot_size root_size
     boot_size=$(whiptail --inputbox "EFI partition size (e.g. 500MiB):" 8 50 "500MiB" \
         3>&1 1>&2 2>&3) || error "Cancelled"
@@ -143,27 +134,24 @@ disk_mode_wipe() {
         mkpart SYS_ROOT xfs "$boot_size" "$root_size" \
         mkpart SYS_VAR xfs "$root_size" 100%
 
-    sleep 1
+    sleep 2
     partprobe "$dev"
-    sleep 1
+    sleep 2
 
     _derive_part_paths "$dev"
-    _format_partitions
+    _format_efi_and_root
+    _ask_var_options
 }
 
-# ─────────────────────────────────────────────
-# Free space mode
-# ─────────────────────────────────────────────
 disk_mode_freespace() {
     local dev
     dev=$(readlink -f "$DISK_BY_ID")
 
-    # Show free space info
     local free_info
     free_info=$(parted "$dev" unit MiB print free 2>/dev/null | grep "Free Space" || echo "Could not determine free space")
 
     whiptail --title "Free Space on $dev" \
-        --msgbox "Free space available:\n\n$free_info\n\nThe installer will create three new partitions in the free space.\nExisting partitions will NOT be touched." \
+        --msgbox "Free space available:\n\n$free_info\n\nThree new partitions will be created in the free space.\nExisting partitions will NOT be touched." \
         18 70 || true
 
     local boot_size root_size
@@ -172,41 +160,41 @@ disk_mode_freespace() {
     root_size=$(whiptail --inputbox "Root partition size (e.g. 50GiB):" 8 50 "50GiB" \
         3>&1 1>&2 2>&3) || error "Cancelled"
 
-    # Find the start of largest free space block
     local free_start
     free_start=$(parted "$dev" unit MiB print free 2>/dev/null \
-        | awk '/Free Space/ {print $1}' \
-        | sed 's/MiB//' \
-        | sort -n \
-        | tail -1)
+        | awk '/Free Space/ {gsub(/MiB/,"",$1); print $1}' \
+        | sort -n | tail -1)
 
     [[ -z "$free_start" ]] && error "Could not find free space on $dev"
 
-    local boot_end root_end
-    boot_end="${free_start}MiB + $boot_size"
-    # Let parted calculate end points relative to start
+    local boot_mb root_mb
+    boot_mb=${boot_size%MiB}
+    root_mb=$(( ${root_size%GiB} * 1024 ))
+
     local p1_start="${free_start}MiB"
-    local p1_end="$((free_start + ${boot_size%MiB}))MiB"
-    local p2_end="$((free_start + ${boot_size%MiB} + ${root_size%GiB} * 1024))MiB"
+    local p1_end="$(( free_start + boot_mb ))MiB"
+    local p2_end="$(( free_start + boot_mb + root_mb ))MiB"
 
     info "Creating partitions in free space starting at ${free_start}MiB..."
     parted -a optimal -s "$dev" -- \
-        mkpart SYS_BOOT fat32 "${p1_start}" "${p1_end}" \
-        set "$(parted "$dev" print | grep SYS_BOOT | awk '{print $1}')" esp on \
-        mkpart SYS_ROOT xfs "${p1_end}" "${p2_end}" \
-        mkpart SYS_VAR xfs "${p2_end}" 100%
+        mkpart SYS_BOOT fat32 "$p1_start" "$p1_end" \
+        mkpart SYS_ROOT xfs   "$p1_end"   "$p2_end" \
+        mkpart SYS_VAR  xfs   "$p2_end"   100%
 
-    sleep 1
+    # Set ESP flag on the new boot partition
+    local boot_partnum
+    boot_partnum=$(parted "$dev" print 2>/dev/null | awk '/SYS_BOOT/ {print $1}')
+    [[ -n "$boot_partnum" ]] && parted "$dev" set "$boot_partnum" esp on || true
+
+    sleep 2
     partprobe "$dev"
-    sleep 1
+    sleep 2
 
     _derive_part_paths "$dev"
-    _format_partitions
+    _format_efi_and_root
+    _ask_var_options
 }
 
-# ─────────────────────────────────────────────
-# Manual mode
-# ─────────────────────────────────────────────
 disk_mode_manual() {
     whiptail --title "Manual Partitioning" \
         --msgbox "Please create the following labeled partitions manually:\n
@@ -216,35 +204,27 @@ disk_mode_manual() {
 
 If you want encryption on /var, create a LUKS container
 and format the inside as XFS or Btrfs. Label the LUKS
-container itself SYS_VAR_CRYPT instead of SYS_VAR.
+container SYS_VAR_CRYPT instead of SYS_VAR.
 
-Open another terminal and partition the disk, then
+Open another terminal, partition the disk, then
 press OK to continue." \
         22 70 || true
 
-    # Wait for user to partition
     whiptail --title "Ready?" \
         --msgbox "Press OK when partitioning is complete." \
         8 50 || true
 
-    # Verify labels
     info "Verifying partition labels..."
     local missing=()
     for label in SYS_BOOT SYS_ROOT; do
         [[ ! -e "/dev/disk/by-label/$label" ]] && missing+=("$label")
     done
-
-    # Either SYS_VAR or SYS_VAR_CRYPT must exist
     if [[ ! -e /dev/disk/by-label/SYS_VAR ]] && \
        [[ ! -e /dev/disk/by-label/SYS_VAR_CRYPT ]]; then
         missing+=("SYS_VAR or SYS_VAR_CRYPT")
     fi
+    [[ ${#missing[@]} -gt 0 ]] && error "Missing required partition labels: ${missing[*]}"
 
-    if [[ ${#missing[@]} -gt 0 ]]; then
-        error "Missing required partition labels: ${missing[*]}"
-    fi
-
-    # Set partition paths from labels
     PART_BOOT=$(readlink -f /dev/disk/by-label/SYS_BOOT)
     PART_ROOT=$(readlink -f /dev/disk/by-label/SYS_ROOT)
 
@@ -252,34 +232,29 @@ press OK to continue." \
         PART_VAR=$(readlink -f /dev/disk/by-label/SYS_VAR_CRYPT)
         ENCRYPT_VAR=true
         _ask_luks_pass_existing
+        echo -n "$LUKS_PASS" | cryptsetup open "$PART_VAR" sys_var -
+        VAR_DEVICE="/dev/mapper/sys_var"
+        VAR_FS=$(blkid -o value -s TYPE "$VAR_DEVICE" 2>/dev/null || echo "xfs")
     else
         PART_VAR=$(readlink -f /dev/disk/by-label/SYS_VAR)
-        # Ask if they encrypted it themselves
+        VAR_DEVICE="$PART_VAR"
         if confirm "Did you encrypt the /var partition with LUKS?"; then
             ENCRYPT_VAR=true
             _ask_luks_pass_existing
+            echo -n "$LUKS_PASS" | cryptsetup open "$PART_VAR" sys_var -
+            VAR_DEVICE="/dev/mapper/sys_var"
         fi
-    fi
-
-    # Get var filesystem type
-    if [[ "$ENCRYPT_VAR" == true ]]; then
-        local inner_dev="/dev/mapper/sys_var_check"
-        cryptsetup open "$PART_VAR" sys_var_check --key-file <(echo "$LUKS_PASS") 2>/dev/null || true
-        VAR_FS=$(blkid -o value -s TYPE /dev/mapper/sys_var_check 2>/dev/null || echo "xfs")
-        cryptsetup close sys_var_check 2>/dev/null || true
-    else
-        VAR_FS=$(blkid -o value -s TYPE "$PART_VAR" 2>/dev/null || echo "xfs")
+        VAR_FS=$(blkid -o value -s TYPE "$VAR_DEVICE" 2>/dev/null || echo "xfs")
     fi
 
     success "Manual partition verification complete"
 }
 
 # ─────────────────────────────────────────────
-# Helpers for partition paths and formatting
+# Format EFI and root (always XFS)
 # ─────────────────────────────────────────────
 _derive_part_paths() {
     local dev="$1"
-    # Handle nvme (nvme0n1p1) vs sda (sda1) naming
     if echo "$dev" | grep -q "nvme\|mmcblk"; then
         PART_BOOT="${DISK_BY_ID}-part1"
         PART_ROOT="${DISK_BY_ID}-part2"
@@ -291,21 +266,18 @@ _derive_part_paths() {
     fi
 }
 
-_format_partitions() {
+_format_efi_and_root() {
     info "Formatting EFI partition..."
     mkfs.vfat -n SYS_BOOT -F 32 "$(readlink -f "$PART_BOOT")"
 
     info "Formatting root partition (XFS)..."
     mkfs.xfs -L SYS_ROOT -f "$(readlink -f "$PART_ROOT")" -n ftype=1
-
-    _ask_var_options
 }
 
 # ─────────────────────────────────────────────
-# 4. /var OPTIONS (filesystem + encryption)
+# /var options — filesystem and encryption
 # ─────────────────────────────────────────────
 _ask_var_options() {
-    # Filesystem
     VAR_FS=$(whiptail --title "/var Filesystem" \
         --menu "Choose filesystem for /var (user data):" 12 60 2 \
         "xfs"   "XFS — simple, reliable (recommended)" \
@@ -317,7 +289,6 @@ _ask_var_options() {
             && BTRFS_SUBVOLS=true || BTRFS_SUBVOLS=false
     fi
 
-    # Encryption
     if confirm "Encrypt /var with LUKS? (recommended for user data)"; then
         ENCRYPT_VAR=true
         _ask_luks_pass_new
@@ -354,39 +325,38 @@ _format_var() {
             --type luks2 \
             "$var_dev" -
         echo -n "$LUKS_PASS" | cryptsetup open "$var_dev" sys_var -
-        local format_target="/dev/mapper/sys_var"
+        VAR_DEVICE="/dev/mapper/sys_var"
     else
-        local format_target="$var_dev"
+        VAR_DEVICE="$var_dev"
     fi
 
     if [[ "$VAR_FS" == "btrfs" ]]; then
         info "Formatting /var as Btrfs..."
-        mkfs.btrfs -L SYS_VAR -f "$format_target"
+        mkfs.btrfs -L SYS_VAR -f "$VAR_DEVICE"
         if [[ "$BTRFS_SUBVOLS" == true ]]; then
             info "Creating Btrfs subvolumes..."
-            mount "$format_target" /mnt/btrfs_tmp
+            mkdir -p /mnt/btrfs_tmp
+            mount "$VAR_DEVICE" /mnt/btrfs_tmp
             btrfs subvolume create /mnt/btrfs_tmp/@home
             btrfs subvolume create /mnt/btrfs_tmp/@log
             umount /mnt/btrfs_tmp
-            rmdir /mnt/btrfs_tmp 2>/dev/null || true
+            rmdir /mnt/btrfs_tmp
         fi
     else
         info "Formatting /var as XFS..."
-        mkfs.xfs -L SYS_VAR -f "$format_target" -n ftype=1
+        mkfs.xfs -L SYS_VAR -f "$VAR_DEVICE" -n ftype=1
     fi
 
     success "Partitions formatted"
 }
 
 # ─────────────────────────────────────────────
-# 5. SYSTEM CONFIGURATION
+# 4. SYSTEM CONFIGURATION
 # ─────────────────────────────────────────────
 system_config() {
-    # Hostname
     HOSTNAME=$(whiptail --inputbox "Enter hostname:" 8 50 "cache22" \
         3>&1 1>&2 2>&3) || error "Cancelled"
 
-    # Timezone
     local tz_list=()
     while IFS= read -r tz; do
         tz_list+=("$tz" "")
@@ -397,7 +367,6 @@ system_config() {
         --menu "Select timezone:" 20 60 12 \
         "${tz_list[@]}" 3>&1 1>&2 2>&3) || error "Cancelled"
 
-    # Locale
     LOCALE=$(whiptail --title "Locale" \
         --menu "Select locale:" 15 60 4 \
         "en_US" "English (US)" \
@@ -406,7 +375,6 @@ system_config() {
         "de_DE" "German" \
         3>&1 1>&2 2>&3) || error "Cancelled"
 
-    # Root password
     while true; do
         ROOT_PASS=$(whiptail --passwordbox "Enter root password:" 8 50 \
             3>&1 1>&2 2>&3) || error "Cancelled"
@@ -417,7 +385,6 @@ system_config() {
         whiptail --msgbox "Passwords do not match. Try again." 8 50 || true
     done
 
-    # First user
     USERNAME=$(whiptail --inputbox "Enter username for first user:" 8 50 \
         3>&1 1>&2 2>&3) || error "Cancelled"
 
@@ -433,7 +400,7 @@ system_config() {
 }
 
 # ─────────────────────────────────────────────
-# 6. IMAGE SELECTION
+# 5. IMAGE SELECTION
 # ─────────────────────────────────────────────
 image_select() {
     local choice
@@ -443,33 +410,24 @@ image_select() {
         "local"  "Use locally built image (localhost/cache22/cachyos)" \
         3>&1 1>&2 2>&3) || error "Cancelled"
 
-    if [[ "$choice" == "local" ]]; then
-        IMAGE="localhost/cache22/cachyos:latest"
-    else
-        IMAGE="ghcr.io/cmspam/cache22/cachyos:latest"
-    fi
+    [[ "$choice" == "local" ]] && IMAGE="localhost/cache22/cachyos:latest" \
+        || IMAGE="ghcr.io/cmspam/cache22/cachyos:latest"
 
     info "Using image: $IMAGE"
 }
 
 # ─────────────────────────────────────────────
-# 7. CONFIRMATION SUMMARY
+# 6. CONFIRMATION
 # ─────────────────────────────────────────────
 confirm_install() {
-    local dev
-    dev=$(readlink -f "$DISK_BY_ID")
-
     local summary="Installation Summary
 ─────────────────────────────
 Disk:       $DISK_BY_ID
 Mode:       $DISK_MODE
-EFI:        $PART_BOOT
 Root:       $PART_ROOT (XFS)
 /var:       $PART_VAR ($VAR_FS)"
-
     [[ "$ENCRYPT_VAR" == true ]] && summary+="\nEncrypt /var: YES (LUKS2)"
     [[ "$BTRFS_SUBVOLS" == true ]] && summary+="\nBtrfs subvols: @home, @log"
-
     summary+="
 ─────────────────────────────
 Hostname:   $HOSTNAME
@@ -486,28 +444,32 @@ Proceed with installation?"
 }
 
 # ─────────────────────────────────────────────
-# 8. INSTALLATION
+# 7. INSTALLATION
 # ─────────────────────────────────────────────
 do_install() {
-    local dev
+    local dev part_boot part_root part_var
     dev=$(readlink -f "$DISK_BY_ID")
-    local part_boot part_root part_var
     part_boot=$(readlink -f "$PART_BOOT")
     part_root=$(readlink -f "$PART_ROOT")
     part_var=$(readlink -f "$PART_VAR")
 
-    # Mount root and boot
     info "Mounting partitions..."
     mkdir -p /mnt
     mount "$part_root" /mnt
     mkdir -p /mnt/boot/efi
     mount "$part_boot" /mnt/boot/efi
 
-    # Open LUKS if needed
+    # Open LUKS if encrypted and not already open
     if [[ "$ENCRYPT_VAR" == true ]]; then
         if ! cryptsetup status sys_var &>/dev/null; then
+            info "Opening LUKS device..."
             echo -n "$LUKS_PASS" | cryptsetup open "$part_var" sys_var -
+        else
+            info "LUKS device already open"
         fi
+        VAR_DEVICE="/dev/mapper/sys_var"
+    else
+        VAR_DEVICE="$part_var"
     fi
 
     # Fix container storage for live environment
@@ -526,13 +488,13 @@ do_install() {
     ostree init --repo=/mnt/ostree/repo --mode=bare
     ostree config --repo=/mnt/ostree/repo set sysroot.bootprefix true
 
-    # Pull image
+    # Pull image if remote
     if [[ "$IMAGE" == ghcr* ]]; then
         info "Pulling image from GHCR (this will take a while)..."
         podman pull "$IMAGE"
     fi
 
-    # Export and commit
+    # Export container to rootfs
     info "Exporting container image to rootfs..."
     mkdir -p /mnt/setup/rootfs
     podman export $(podman create "$IMAGE" sh) | tar -xC /mnt/setup/rootfs
@@ -554,7 +516,6 @@ do_install() {
     rm -rf /mnt/setup/rootfs/usr/local
     ln -s /var/usrlocal /mnt/setup/rootfs/usr/local
 
-    # tmpfiles
     cat >> /mnt/setup/rootfs/usr/lib/tmpfiles.d/ostree-0-integration.conf << 'TMPFILES'
 d /var/home 0755 root root -
 d /var/scratch/users 0755 root root -
@@ -590,7 +551,7 @@ TMPFILES
     setcap cap_setuid+eip /mnt/setup/rootfs/usr/bin/newuidmap
     setcap cap_setgid+eip /mnt/setup/rootfs/usr/bin/newgidmap
 
-    # Write machine-specific /etc files into the rootfs before commit
+    # Write machine-specific /etc files
     _write_etc_files
 
     # Commit to OSTree
@@ -608,7 +569,6 @@ TMPFILES
         done < /mnt/setup/rootfs/usr/share/cache22/.karg
     fi
 
-    # Add LUKS karg if encrypted
     if [[ "$ENCRYPT_VAR" == true ]]; then
         local luks_uuid
         luks_uuid=$(cryptsetup luksUUID "$part_var")
@@ -625,46 +585,36 @@ TMPFILES
         --retain \
         cache22/x86_64/standard 2>&1 | grep -v "grub2-mkconfig\|Bootloader write" || true
 
-    # Install GRUB and generate config
+    # Install GRUB
     _install_grub "$dev" "$part_root"
 
-    # Create user in deployed system
+    # Create user
     _create_user
 
     success "Installation complete!"
 }
 
 # ─────────────────────────────────────────────
-# Write machine-specific /etc files
+# Write machine-specific /etc
 # ─────────────────────────────────────────────
 _write_etc_files() {
     local etc="/mnt/setup/rootfs/usr/etc"
 
-    # Hostname
     echo "$HOSTNAME" > "$etc/hostname"
-
-    # Timezone
     ln -sf "/usr/share/zoneinfo/$TIMEZONE" "$etc/localtime"
-
-    # Locale
     echo "LANG=${LOCALE}.UTF-8" > "$etc/locale.conf"
     echo "${LOCALE}.UTF-8 UTF-8" > "$etc/locale.gen"
 
-    # fstab — write appropriate version
     {
         echo "LABEL=SYS_ROOT /         auto  rw,relatime 0 1"
         echo "LABEL=SYS_BOOT /boot/efi vfat  rw,relatime,fmask=0022,dmask=0022,codepage=437,iocharset=ascii,shortname=mixed,utf8,errors=remount-ro 0 2"
         if [[ "$ENCRYPT_VAR" == true ]]; then
             echo "/dev/mapper/sys_var /var auto rw,relatime 0 2"
         else
-            echo "LABEL=SYS_VAR  /var  auto  rw,relatime 0 2"
-        fi
-        if [[ "$VAR_FS" == "btrfs" && "$BTRFS_SUBVOLS" == true ]]; then
-            echo "# Btrfs subvolumes managed automatically"
+            echo "LABEL=SYS_VAR /var auto rw,relatime 0 2"
         fi
     } > "$etc/fstab"
 
-    # crypttab if encrypted
     if [[ "$ENCRYPT_VAR" == true ]]; then
         echo "sys_var  LABEL=SYS_VAR_CRYPT  none  luks,timeout=90" > "$etc/crypttab"
     fi
@@ -678,19 +628,22 @@ _install_grub() {
 
     info "Installing GRUB..."
     local deploy
-    deploy=$(ls -d /mnt/ostree/deploy/cache22/deploy/*.0 | grep -v origin | head -1)
+    deploy=$(ls -d /mnt/ostree/deploy/cache22/deploy/*.0 2>/dev/null \
+        | grep -v origin | head -1)
+    [[ -z "$deploy" ]] && error "Could not find OSTree deployment"
 
     mkdir -p "$deploy/sysroot/ostree"
     mkdir -p "$deploy/boot/efi/EFI/grub"
-    mount --bind /dev "$deploy/dev"
+    mount --bind /dev  "$deploy/dev"
     mount --bind /proc "$deploy/proc"
-    mount --bind /sys "$deploy/sys"
-    mount --rbind /mnt/boot "$deploy/boot"
+    mount --bind /sys  "$deploy/sys"
+    mount --rbind /mnt/boot   "$deploy/boot"
     mount --rbind /mnt/ostree "$deploy/sysroot/ostree"
 
     export GRUB_DEVICE=LABEL=SYS_ROOT
     export GRUB_DEVICE_BOOT=LABEL=SYS_BOOT
-    export GRUB_DEVICE_UUID=$(blkid -s UUID -o value "$part_root")
+    export GRUB_DEVICE_UUID
+    GRUB_DEVICE_UUID=$(blkid -s UUID -o value "$part_root")
 
     chroot "$deploy" grub-install \
         --target=x86_64-efi \
@@ -709,17 +662,15 @@ _install_grub() {
 }
 
 # ─────────────────────────────────────────────
-# Create user in deployed system
+# Create user
 # ─────────────────────────────────────────────
 _create_user() {
     info "Creating user $USERNAME..."
     local deploy
-    deploy=$(ls -d /mnt/ostree/deploy/cache22/deploy/*.0 | grep -v origin | head -1)
+    deploy=$(ls -d /mnt/ostree/deploy/cache22/deploy/*.0 2>/dev/null \
+        | grep -v origin | head -1)
 
-    # Set root password
     echo "root:${ROOT_PASS}" | chroot "$deploy" chpasswd
-
-    # Create user
     chroot "$deploy" useradd -m -G wheel -s /bin/bash "$USERNAME"
     echo "${USERNAME}:${USER_PASS}" | chroot "$deploy" chpasswd
 
@@ -727,13 +678,11 @@ _create_user() {
 }
 
 # ─────────────────────────────────────────────
-# 9. CLEANUP AND REBOOT
+# 8. CLEANUP
 # ─────────────────────────────────────────────
 cleanup() {
     info "Cleaning up..."
     umount -R -l /mnt 2>/dev/null || true
-    [[ "$ENCRYPT_VAR" == true ]] && \
-        cryptsetup close sys_var 2>/dev/null || true
 
     whiptail --title "Installation Complete" \
         --msgbox "Cache22 has been installed successfully!\n\nHostname:  $HOSTNAME\nUser:      $USERNAME\nTimezone:  $TIMEZONE\n\nRemove installation media and reboot.\nSelect Cache22 from your UEFI boot menu." \
