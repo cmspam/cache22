@@ -33,37 +33,82 @@ Built on the [YoRHa](https://github.com/lcook/yorha) toolkit, Cache22 gives you 
 - Bluetooth, printing, and network shares out of the box
 
 ### Hardware Support
-- AMD, Intel (including Xe), and NVIDIA GPUs (single unified image)
-- `sof-firmware`, `alsa-firmware` for broad audio device support
+- AMD, Intel (including Xe), and NVIDIA GPUs — single unified image, all supported
+- `sof-firmware` and `alsa-firmware` for broad audio device support
 - `linux-cachyos` kernel with full sched-ext support
-- ntfsplus kernel module for NTFS drives — faster and more reliable than ntfs-3g or ntfs3
-- Xbox One/Series controller support via xone driver
+- ntfsplus kernel module for NTFS drives — faster and more reliable than ntfs-3g or the in-kernel ntfs3 driver. Mount your Windows Steam library safely.
+- Xbox One and Xbox Series controller support via the xone driver
 
 ### Gaming
 - Steam (via `cachyos-gaming-applications`)
 - Gamescope and gamescope-session
 - MangoHud
-- **Patched QEMU** — includes VAAPI hardware video transcoding, custom refresh rate support with SDL backend, and higher polling rate patches for improved desktop responsiveness
-- **Patched Gamescope** — fixes for Steam Remote Play with NVIDIA cards
 - Full Vulkan support for AMD, Intel, and NVIDIA including 32-bit layers
+
+### Patches and Optimizations
+Cache22 ships patched versions of two key gaming packages:
+
+- **QEMU** — patched to add VAAPI hardware video transcoding support, custom refresh rate support with the SDL backend, and a higher polling rate for improved desktop responsiveness
+- **Gamescope** — patched to fix Steam Remote Play with NVIDIA GPUs
+
+These are provided via custom package repositories and updated independently of the base image.
 
 ### Containers and Virtualization
 - Flatpak with Flathub pre-configured
 - Toolbox and Distrobox for mutable development containers
-- Incus and Incus UI for full virtual machine management
+- Incus and Incus UI for full virtual machine and container management
 - QEMU/KVM with virt-manager
 
 ### Software Installation
-The immutable root means you install software differently from a traditional distro:
+
+The immutable root means you install software differently from a traditional distribution:
 
 | Type | Tool |
 |------|------|
 | GUI apps | Flatpak (Flathub pre-configured) |
 | CLI dev tools | Toolbox or Distrobox |
 | Virtual machines | Incus or QEMU |
-| System-level (Arch packages) | Not possible — request inclusion in the image |
+| System-level packages | Not possible — request inclusion in the image |
 
 You can also add [Homebrew](https://brew.sh) or [Nix](https://nixos.org) in your home directory for additional package management without touching the system root.
+
+---
+
+## Optional Services
+
+Some included services are not enabled by default since they are not needed by all users. Enable only what you need.
+
+### Incus (Virtual Machines and Containers)
+
+Incus is included but not started by default:
+```bash
+sudo systemctl enable --now incus
+```
+
+After enabling, the Incus web UI is available at `https://localhost:8443`. You can manage VMs and containers either through the UI or via the `incus` command line tool.
+
+### supergfxctl (Hybrid Graphics / Laptop GPU Switching)
+
+If your laptop has hybrid graphics (e.g. an integrated Intel or AMD GPU alongside a discrete NVIDIA GPU), `supergfxctl` lets you switch between GPU modes:
+```bash
+sudo systemctl enable --now supergfxd
+```
+
+Once running, GPU mode can be switched from the system tray or via the command line:
+```bash
+supergfxctl --mode integrated   # battery saving, discrete GPU off
+supergfxctl --mode hybrid       # NVIDIA available on demand
+supergfxctl --mode dedicated    # always use NVIDIA
+```
+
+### Sunshine (Game Streaming)
+
+Sunshine is included for streaming games to Moonlight clients. Launch it when needed:
+```bash
+sunshine
+```
+
+The Sunshine web interface for configuration is available at `https://localhost:47990`. Add it to KDE autostart in System Settings if you want it running at login.
 
 ---
 
@@ -90,10 +135,11 @@ The script automatically detects your user and the correct Gamescope session. No
 ## Installation
 
 ### Requirements
+
 - UEFI firmware (BIOS not supported)
-- x86-64-v3 capable CPU (Haswell/2013 or newer for Intel, Excavator/2015 or newer for AMD)
-- 50GB minimum for root, plus space for `/var` (user data)
-- Internet connection
+- x86-64-v3 capable CPU (Intel Haswell 2013 or newer, AMD Excavator 2015 or newer)
+- 50GB minimum for the root partition, plus space for `/var` (user data)
+- Internet connection during install
 
 ### From an Arch or CachyOS Live USB
 
@@ -107,16 +153,17 @@ sudo ./install.sh
 ```
 
 The installer will guide you through:
-- Disk selection and partitioning (automatic, free space, or manual)
-- Optional LUKS encryption for `/var` (user data partition)
-- Optional Btrfs for `/var` (XFS is default)
-- Timezone, locale, hostname
-- Root password and first user creation
-- Image source (GHCR or local build)
 
-### Secure Boot (optional, after install)
+- Disk selection — wipe entire disk, use free space alongside existing partitions, or partition manually
+- Filesystem choice for `/var` — XFS (default) or Btrfs with optional subvolumes
+- Optional LUKS encryption for `/var` (user data — the root partition is public and immutable so encrypting it serves no purpose)
+- Timezone, locale, and hostname
+- Root password and first user account
+- Image source — pull from GHCR or use a locally built image
 
-Cache22 includes `sbctl` for managing Secure Boot keys. With Secure Boot disabled in your UEFI firmware:
+### Secure Boot (optional, after first boot)
+
+Cache22 includes `sbctl` for Secure Boot key management. With Secure Boot **disabled** in your UEFI firmware:
 ```bash
 sudo sbctl create-keys
 sudo sbctl enroll-keys --microsoft
@@ -124,37 +171,48 @@ sudo sbctl sign -s /boot/efi/EFI/BOOT/BOOTX64.EFI
 sudo sbctl sign -s /boot/efi/EFI/grub/grubx64.efi 2>/dev/null || true
 ```
 
-Then enable Secure Boot in your UEFI firmware and reboot. Keys persist across updates — `c22-update` re-signs automatically if sbctl is set up.
+Then enable Secure Boot in your UEFI firmware and reboot. The `--microsoft` flag retains Microsoft's keys alongside yours for hardware compatibility. `c22-update` automatically re-signs EFI binaries after updates if sbctl is set up.
 
 ---
 
 ## Updating
 
-Updates are built automatically every week and pushed to the GitHub Container Registry. To update:
+New images are built automatically every week. To update your system:
 ```bash
 sudo c22-update
 sudo reboot
 ```
 
-That's it. The new image is pulled, committed to OSTree, and staged for the next boot. Your previous deployment is kept as a rollback target.
+The new image is pulled from GHCR, committed to the local OSTree repository, and staged for the next boot. Your previous deployment is retained as a rollback target.
 
 ### Rolling Back
 
-If something goes wrong after an update:
+If something goes wrong after an update, you have two options:
+
+**From the running system:**
 ```bash
-# From the running system
 sudo yorha deployment list
 sudo ostree admin set-default 1
 sudo reboot
-
-# Or — select the previous deployment from the GRUB menu at boot
 ```
+
+**From the GRUB menu:**
+Select the previous deployment entry at boot. No commands needed.
+
+---
+
+## Build Schedule
+
+New images are published to `ghcr.io/cmspam/cache22/cachyos`:
+
+- **Weekly** — every Friday at 19:00 UTC via GitHub Actions
+- **On every push** to the `main` branch
 
 ---
 
 ## Building Locally
 
-If you want to build your own image:
+To build your own image:
 ```bash
 git clone --recursive https://github.com/cmspam/cache22
 cd cache22
@@ -162,20 +220,10 @@ sudo ./yorha compose container-base
 sudo ./yorha compose container
 ```
 
-Deploy a locally built image:
+Deploy a locally built image from within a running Cache22 system:
 ```bash
 sudo yorha upgrade local
 ```
-
----
-
-## Image Schedule
-
-New images are built:
-- **Weekly** — every Friday at 19:00 UTC, automatically via GitHub Actions
-- **On every push** to the `main` branch
-
-Images are published to `ghcr.io/cmspam/cache22/cachyos`.
 
 ---
 
