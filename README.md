@@ -1,199 +1,190 @@
 <p align="center">
-  <b>YoRHa</b> (寄葉) "passing leaf" —  Immutable Arch Linux distribution with OSTree</center>
-  <br>
-  <br>
-  <a href="https://github.com/lcook/yorha/actions/workflows/publish-images.yaml">
-    <img src="https://github.com/lcook/yorha/actions/workflows/publish-images.yaml/badge.svg"></img>
-  </a>
+  <b>Cache22</b> — An immutable, atomic CachyOS-based desktop for people who just want it to work.
 </p>
 
-- [Overview](#overview)
-- [Design philosophy](#design-philosophy)
-- [Installation](#installation)
-- [Development](#development)
-    - [Flavors](#flavors)
-- [Tentative goals](#tentative-goals)
-- [Credits](#credits)
-- [License](#license)
+---
 
-![](.resources/screenshot_1.png)
-![](.resources/screenshot_2.png)
+## What is Cache22?
 
-_Complementary blog post can be found [here](https://www.lcook.net/notes/yorha/)_.
+The name is a joke — using a bleeding-edge, performance-optimized Linux distribution like CachyOS is great in theory, but in practice you often end up wrestling with broken packages, misconfigured gaming setups, driver workarounds, and opinionated helpers that get in your way. A catch-22.
 
-### Overview
+Cache22 resolves this by building on top of CachyOS's excellent x86-64-v3 optimized packages and repositories, but delivering them as an **immutable, atomic OS image** powered by [OSTree](https://ostreedev.github.io/ostree). The system is read-only and reproducible. Updates are atomic and reversible. You never end up in a half-broken state. When something goes wrong, you roll back.
 
-This repository provides a toolkit for building and deploying OSTree-based Linux distributions. While Arch Linux is the default base,
-it is possible to use alternative distributions like Debian, Fedora, Alpine and friends simply by adding them under [base](base)
-(see [archlinux](base/archlinux) for reference). However, please note that effort currently focuses exclusively on Arch Linux.
+Built on the [YoRHa](https://github.com/lcook/yorha) toolkit, Cache22 gives you a clean, vanilla KDE Plasma desktop on Wayland with everything you need already baked in — gaming tools, virtualization, container support, input methods, broad hardware support — without any of the configuration burden.
 
-### Design philosophy
+---
 
-YoRHa is built around the concept of an atomic desktop: where the core system is kept minimal, immutable, and read-only. This approach enables
-reproducible deployments and versioned rollbacks, making upgrades and recoveries simple and dependable through OSTree. The root filesystem is
-created via containers, ensuring a clean and consistent environment each time, and each deployment performs a factory reset of the system
-configuration (unless overridden).
+## Design Philosophy
 
-Graphical applications are installed via Flatpak whenever possible providing isolation and easy updates. Developers and power users can utilise `toolbox`
-containers for command-line tools and development environments, keeping the base system uncluttered. This separation means your system, graphical, and
-command-line workloads each operate in their own dedicated space.
+- **Immutable root** — `/usr` and `/` are read-only. The system is exactly what was built, on every machine, every time.
+- **Atomic updates** — updates are pulled as a complete new image and staged for the next boot. If anything goes wrong, the previous deployment is one reboot away.
+- **Vanilla KDE** — no opinionated theming, no custom greeter, no surprises. Just KDE Plasma on Wayland as it was meant to be.
+- **Apps via Flatpak, Toolbox, Distrobox, or Incus** — the immutable root means you install applications in their own isolated environments, not into the system. This keeps the base clean and your apps portable.
 
-At a higher level, the end system is comprised of:
+---
 
-* [OSTree](https://ostreedev.github.io/ostree): Atomic updates and rollback mechanism with a read-only, immutable root filesystem
-* [Toolbox](https://containertoolbx.org): Disposable development containers
-* [Flatpak](https://flatpak.org): Sandboxed application deployment for GUI software
-* [Podman](https://podman.io): Containerised system image creation for OSTree deployments
-* Arch Linux (by the way).
+## What's Included
 
-Upgrades are performed by building a new container image with `podman` or by using the provided GitHub container repository. If you hit a
-problem, you can easily roll back to the previously working deployment.
+### Desktop
+- KDE Plasma 6 (Wayland, default)
+- Plasma Login Manager with auto-login support
+- Full font support including CJK (Japanese, Chinese, Korean)
+- Fcitx5 with Mozc for Japanese input
+- Bluetooth, printing, and network shares out of the box
 
-> [!NOTE]
-> Configuration files from my [dotfiles](https://github.com/lcook/dots) repository are copied to `/etc/skel` during image creation, so every
-> new user account is automatically set up with a complete and consistent environment. You can of course swap these files with your own
-> configurations if preferred.
+### Hardware Support
+- AMD, Intel (including Xe), and NVIDIA GPUs (single unified image)
+- `sof-firmware`, `alsa-firmware` for broad audio device support
+- `linux-cachyos` kernel with full sched-ext support
+- ntfsplus kernel module for NTFS drives — faster and more reliable than ntfs-3g or ntfs3
+- Xbox One/Series controller support via xone driver
 
-### Installation
+### Gaming
+- Steam (via `cachyos-gaming-applications`)
+- Gamescope and gamescope-session
+- MangoHud
+- **Patched QEMU** — includes VAAPI hardware video transcoding, custom refresh rate support with SDL backend, and higher polling rate patches for improved desktop responsiveness
+- **Patched Gamescope** — fixes for Steam Remote Play with NVIDIA cards
+- Full Vulkan support for AMD, Intel, and NVIDIA including 32-bit layers
 
-It is recommended to use a live environment such as the [Arch Linux ISO](https://archlinux.org/download/) to bootstrap YoRHa to a drive. The following instructions
-are based on this setup; if you use a different system, the process or results may differ.
+### Containers and Virtualization
+- Flatpak with Flathub pre-configured
+- Toolbox and Distrobox for mutable development containers
+- Incus and Incus UI for full virtual machine management
+- QEMU/KVM with virt-manager
 
-1. **Install the necessary dependencies** needed to bootstrap a system:
+### Software Installation
+The immutable root means you install software differently from a traditional distro:
 
-```console
-# pacman --noconfirm -Sy git ostree podman
+| Type | Tool |
+|------|------|
+| GUI apps | Flatpak (Flathub pre-configured) |
+| CLI dev tools | Toolbox or Distrobox |
+| Virtual machines | Incus or QEMU |
+| System-level (Arch packages) | Not possible — request inclusion in the image |
+
+You can also add [Homebrew](https://brew.sh) or [Nix](https://nixos.org) in your home directory for additional package management without touching the system root.
+
+---
+
+## Deck Mode
+
+Cache22 includes a built-in gaming mode that boots directly into a Steam/Gamescope session, similar to SteamOS on the Steam Deck.
+
+**Enable deck mode:**
+```bash
+sudo c22-deck-enable
+sudo reboot
 ```
 
-2. **Clone this repository** on a live system:
-
-```console
-# git clone --recursive https://github.com/lcook/yorha /tmp/yorha
+**Disable deck mode (return to KDE desktop):**
+```bash
+sudo c22-deck-disable
+sudo reboot
 ```
 
-3. **Prepare the disk for bootstrapping** by running the below command. You will be prompted choose the target disk, which will
-    then be automatically partitioned and formatted with XFS as the default filesystem. The setup creates three labeled
-    partitions:
-    - `SYS_ROOT`: root filesystem (`/`)
-    - `SYS_VAR`: persistent data (`/var`)
-    - `SYS_BOOT`: EFI boot partition (`/boot/efi`)
+The script automatically detects your user and the correct Gamescope session. No configuration required.
 
-> [!NOTE]
-> Make sure to source the script to setup the environment variables correctly otherwise the bootstrap process will fail.
+---
 
-```console
-# . ./yorha live prep-disk # You MUST source the script!
-# ./yorha live init
+## Installation
+
+### Requirements
+- UEFI firmware (BIOS not supported)
+- x86-64-v3 capable CPU (Haswell/2013 or newer for Intel, Excavator/2015 or newer for AMD)
+- 50GB minimum for root, plus space for `/var` (user data)
+- Internet connection
+
+### From an Arch or CachyOS Live USB
+
+1. Boot the live environment
+2. Connect to the internet
+3. Download and run the installer:
+```bash
+curl -O https://raw.githubusercontent.com/cmspam/cache22/main/install.sh
+chmod +x install.sh
+sudo ./install.sh
 ```
 
-4. **Deploy OCI containter image with OSTree** with one of two methods below:
+The installer will guide you through:
+- Disk selection and partitioning (automatic, free space, or manual)
+- Optional LUKS encryption for `/var` (user data partition)
+- Optional Btrfs for `/var` (XFS is default)
+- Timezone, locale, hostname
+- Root password and first user creation
+- Image source (GHCR or local build)
 
-<details open>
+### Secure Boot (optional, after install)
 
-<summary>Pre-built GitHub Container Registry images (recommended for consumers)</summary>
-
-Container images are built automatically by [GitHub Actions](.github/workflows/publish-images.yaml) and can be found
-[here](https://github.com/lcook?tab=packages&repo_name=yorha) following each commit that passes
-the build pipeline, in addition to weekly scheduled builds to prevent stale images accruing. You may replace <-flavor>
-with the images detailed in [Flavors](#flavors).
-
-```console
-# ./yorha live install ghcr.io/lcook/yorha/archlinux<-flavor>
-# systemctl reboot
+Cache22 includes `sbctl` for managing Secure Boot keys. With Secure Boot disabled in your UEFI firmware:
+```bash
+sudo sbctl create-keys
+sudo sbctl enroll-keys --microsoft
+sudo sbctl sign -s /boot/efi/EFI/BOOT/BOOTX64.EFI
+sudo sbctl sign -s /boot/efi/EFI/grub/grubx64.efi 2>/dev/null || true
 ```
 
-After rebooting, you can upgrade your system whenever new container images are available in the container registry.
-To check, run the following:
+Then enable Secure Boot in your UEFI firmware and reboot. Keys persist across updates — `c22-update` re-signs automatically if sbctl is set up.
 
-```console
-$ sudo yorha upgrade remote
+---
+
+## Updating
+
+Updates are built automatically every week and pushed to the GitHub Container Registry. To update:
+```bash
+sudo c22-update
+sudo reboot
 ```
 
-Viola - you are now up and running! This is the more "hands-off" approach towards configuring the system, meanwhile
-the below grants the flexibility to do as you please with custom images.
+That's it. The new image is pulled, committed to OSTree, and staged for the next boot. Your previous deployment is kept as a rollback target.
 
-</details>
+### Rolling Back
 
-<details>
+If something goes wrong after an update:
+```bash
+# From the running system
+sudo yorha deployment list
+sudo ostree admin set-default 1
+sudo reboot
 
-<summary>Locally built images (recommended for development and custom images)</summary>
-
-Alternatively, custom local images can be built and adapted to your liking. This can be helpful for situations
-when you want to make local modifications to the deployed image not available in the provided image in the GitHub
-Container Registry.
-
-```console
-# ./yorha compose container-base
-# ./yorha compose container
-# ./yorha compose flavor <flavor> # Optional
-# ./yorha live install
-# systemctl reboot
+# Or — select the previous deployment from the GRUB menu at boot
 ```
 
-This will build both the [base image](base/archlinux/Containerfile) and then atop any custom settings or tweaks
-found [here](base/archlinux/Containerfile.yorha). To make additions after the initial bootstrapping phase,
-please read [Development](#development).
+---
 
-</details>
+## Building Locally
 
-> [!NOTE]
-> The default `root` account password is set to `ostree` - please change this after logging in!
-
-### Development
-
-For local development, it is suggested to clone this repository to your machine. By maintaining a local copy at
-`~/dev/yorha` the version will override the system-installed libexec and yorha scripts (located in `/usr/libexec/yorha-*` and `/usr/bin/yorha`).
-
-The fish shell configuration initially copied from `/etc/skel` into your home directory includes a check for the corresponding project directory
-(see [this script](https://github.com/lcook/dots/blob/main/fish/functions/__yorha_env_start.fish)). If the directory exists, it sets `YORHA_BASE_PATH`
-and `YORHA_LIBEXEC_PATH`; if it is absent, the `yorha` script falls back to the defaults defined in [yorha-config](libexec/yorha-config).
-
-To get started, clone both the main repository and the accompanying dotfiles, then execute the helper scripts to apply the chosen theme and establish
-the proper symlinks:
-
-```console
-$ git clone --recursive https://github.com/lcook/yorha ~/dev
-$ git clone https://github.com/lcook/dots ~/dev && cdots
-$ ./0-themer [theme]
-$ ./1-symlinks
+If you want to build your own image:
+```bash
+git clone --recursive https://github.com/cmspam/cache22
+cd cache22
+sudo ./yorha compose container-base
+sudo ./yorha compose container
 ```
 
-When modifying container images, update the files under [base/archlinux](base/archlinux) and rebuild the images by running:
-
-```console
-$ sudo yorha compose container-base  # Build the base Arch Linux container image
-$ sudo yorha compose container       # Build the OSTree image with your customisations
-$ sudo yorha compose flavor <flavor> # Optionally build flavor
-$ sudo yorha upgrade local           # Deploy the updated container built image via OSTree
-$ systemctl reboot
+Deploy a locally built image:
+```bash
+sudo yorha upgrade local
 ```
 
-#### Flavors
+---
 
-Flavors are purpose-specific overlays for the base image that add hardware specific packages, configurations and tweaks during image creation. Flavors live under [base/archlinux/flavor](base/archlinux/flavor/).
+## Image Schedule
 
-Some provided images built:
+New images are built:
+- **Weekly** — every Friday at 19:00 UTC, automatically via GitHub Actions
+- **On every push** to the `main` branch
 
-- [ghcr.io/lcook/yorha/archlinux-nvidia](https://github.com/lcook/yorha/pkgs/container/yorha%2Farchlinux-nvidia): Adds packages/configurations commonly required for systems using NVIDIA GPUs
-- [ghcr.io/lcook/yorha/archlinux-intel](https://github.com/lcook/yorha/pkgs/container/yorha%2Farchlinux-intel): Adds packages/configurations commonly required for systems using Intel integrated graphics.
+Images are published to `ghcr.io/cmspam/cache22/cachyos`.
 
-These optionally can be built locally and deployed with the following:
+---
 
-```console
-$ sudo yorha compose flavor archlinux-nvidia # Syntax for `compose flavor` is [base]-[flavor]
-$ sudo yorha upgrade local # Deploy after build
-```
+## Credits
 
-### Tentative goals
+Cache22 is built on top of [YoRHa](https://github.com/lcook/yorha) by [lcook](https://github.com/lcook), which provides the OSTree image building and deployment toolkit. Special thanks to the [CachyOS](https://cachyos.org) team for their excellent kernel, repositories, and packages.
 
-* Refactor the `yorha` buildkit to leverage the [OSTree C API](https://ostreedev.github.io/ostree/reference/) replacing a handful of shell scripts, inspired by projects like `rpm-ostree`
-* Expand support to include additional Linux distributions beyond Arch Linux
-* Migrate to [bootc](https://github.com/bootc-dev/bootc) once [bootupd](https://github.com/coreos/bootupd) is better supported on non-Fedora systems.
+---
 
-### Credits
-
-Special thanks to [GrabbenD](https://github.com/GrabbenD) ([ostree-utility](https://github.com/GrabbenD/ostree-utility)) for inspiration.
-
-### License
+## License
 
 [BSD 2-Clause](LICENSE)
