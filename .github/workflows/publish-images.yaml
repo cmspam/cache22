@@ -22,16 +22,16 @@ jobs:
       packages: write
 
     steps:
-      - name: Free disk space
-        uses: jlumbroso/free-disk-space@main
-        with:
-          tool-cache: true
-          android: true
-          dotnet: true
-          haskell: true
-          large-packages: true
-          docker-images: true
-          swap-storage: true
+#      - name: Free disk space
+#        uses: jlumbroso/free-disk-space@main
+#        with:
+#          tool-cache: true
+#          android: true
+#          dotnet: true
+#          haskell: true
+#          large-packages: true
+#          docker-images: true
+#          swap-storage: true
 
       - name: Check available disk space
         run: df -h
@@ -45,35 +45,48 @@ jobs:
       - name: Login to registry
         run: echo "${{ secrets.GITHUB_TOKEN }}" | podman login --username "${{ github.actor }}" --password-stdin $OCI_REGISTRY
 
-      - name: Build container images and publish
+      - name: Build container images
         run: |
           sed -i "0,/localhost/s/localhost/$OCI_REGISTRY/" libexec/yorha-config
           sed -i "s|IMAGE=localhost|IMAGE=$OCI_REGISTRY/$GH_ACCOUNT|g" base/$DEFAULT_BASE/Containerfile.cache22
           ./yorha compose container-base
           ./yorha compose container
-          for _image in $OCI_REGISTRY/$GH_ACCOUNT/$GH_PROJECT/$DEFAULT_BASE-base \
-            $OCI_REGISTRY/$GH_ACCOUNT/$GH_PROJECT/$DEFAULT_BASE; do podman push --compression-format zstd --compression-level 19 $_image; done
 
-      - name: Generate package list and changelog
+      - name: Check for package changes
+        id: check_changes
         run: |
-          DATE=$(date +%Y-%m-%d)
-          BUILD_DATE=$(date +%Y%m%d.%H%M)
-
-          # Get current package list from the built image
+          # Get package list from the newly built image
           podman run --rm --entrypoint /bin/bash \
             $OCI_REGISTRY/$GH_ACCOUNT/$GH_PROJECT/$DEFAULT_BASE:latest \
             -c "pacman -Q" | sort > /tmp/packages-new.txt
 
-          # Compare with previous package list if it exists
+          # Compare against packages.txt in the repo (reflects last published build)
           if [ -f packages.txt ]; then
             cp packages.txt /tmp/packages-old.txt
           else
             touch /tmp/packages-old.txt
           fi
 
-          # Generate changelog
+          if diff -q /tmp/packages-old.txt /tmp/packages-new.txt > /dev/null 2>&1; then
+            echo "No package changes detected, skipping push."
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+          else
+            echo "Package changes detected, will push."
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Push container images
+        if: steps.check_changes.outputs.has_changes == 'true'
+        run: |
+          for _image in $OCI_REGISTRY/$GH_ACCOUNT/$GH_PROJECT/$DEFAULT_BASE-base \
+            $OCI_REGISTRY/$GH_ACCOUNT/$GH_PROJECT/$DEFAULT_BASE; do
+            podman push --compression-format zstd --compression-level 19 $_image
+          done
+
+      - name: Generate package list and changelog
+        if: steps.check_changes.outputs.has_changes == 'true'
+        run: |
           python3 << 'PYEOF'
-          import re
           from datetime import datetime
 
           with open('/tmp/packages-old.txt') as f:
@@ -88,44 +101,38 @@ jobs:
 
           date = datetime.now().strftime('%Y-%m-%d %H:%M UTC')
 
-          # Read existing changelog
           try:
               with open('CHANGELOG.md') as f:
                   existing = f.read()
           except FileNotFoundError:
               existing = ''
 
-          # Build new entry
           entry = f'## {date}\n\n'
 
-          if not added and not removed and not changed:
-              entry += '_No package changes in this build._\n\n'
-          else:
-              if changed:
-                  entry += '### Updated\n\n'
-                  entry += '| Package | From | To |\n'
-                  entry += '|---------|------|----|\n'
-                  for pkg in sorted(changed):
-                      entry += f'| `{pkg}` | {changed[pkg][0]} | {changed[pkg][1]} |\n'
-                  entry += '\n'
+          if changed:
+              entry += '### Updated\n\n'
+              entry += '| Package | From | To |\n'
+              entry += '|---------|------|----|\n'
+              for pkg in sorted(changed):
+                  entry += f'| `{pkg}` | {changed[pkg][0]} | {changed[pkg][1]} |\n'
+              entry += '\n'
 
-              if added:
-                  entry += '### Added\n\n'
-                  entry += '| Package | Version |\n'
-                  entry += '|---------|--------|\n'
-                  for pkg in sorted(added):
-                      entry += f'| `{pkg}` | {added[pkg]} |\n'
-                  entry += '\n'
+          if added:
+              entry += '### Added\n\n'
+              entry += '| Package | Version |\n'
+              entry += '|---------|--------|\n'
+              for pkg in sorted(added):
+                  entry += f'| `{pkg}` | {added[pkg]} |\n'
+              entry += '\n'
 
-              if removed:
-                  entry += '### Removed\n\n'
-                  entry += '| Package | Version |\n'
-                  entry += '|---------|--------|\n'
-                  for pkg in sorted(removed):
-                      entry += f'| `{pkg}` | {removed[pkg]} |\n'
-                  entry += '\n'
+          if removed:
+              entry += '### Removed\n\n'
+              entry += '| Package | Version |\n'
+              entry += '|---------|--------|\n'
+              for pkg in sorted(removed):
+                  entry += f'| `{pkg}` | {removed[pkg]} |\n'
+              entry += '\n'
 
-          # Prepend to changelog
           header = '# Cache22 Package Changelog\n\n'
           if existing.startswith(header):
               existing = existing[len(header):]
@@ -136,10 +143,10 @@ jobs:
           print(f"Changes: {len(changed)} updated, {len(added)} added, {len(removed)} removed")
           PYEOF
 
-          # Save new package list
           cp /tmp/packages-new.txt packages.txt
 
       - name: Commit package list and changelog
+        if: steps.check_changes.outputs.has_changes == 'true'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
