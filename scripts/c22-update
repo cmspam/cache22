@@ -21,8 +21,12 @@ require_root() {
 # Source yorha-config to get OCI_TAG — the full image reference for
 # this installation. This avoids hardcoding the registry or repo name
 # and works correctly for any flavor built on this base.
+# Temporarily disable set -e while sourcing since yorha-config uses
+# [ ] && || chains that can return non-zero without being errors.
 # shellcheck source=/usr/libexec/yorha-config
+set +e
 . /usr/libexec/yorha-config
+set -e
 IMAGE="${OCI_TAG}:latest"
 
 # ─────────────────────────────────────────────
