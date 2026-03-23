@@ -15,33 +15,29 @@ warn()    { echo -e "${YELLOW}==>${RESET} $*"; }
 error()   { echo -e "${RED}==>${RESET} ${BOLD}$*${RESET}" >&2; exit 1; }
 
 require_root() {
-    [[ $EUID -ne 0 ]] && error "Run with sudo"
+    if [[ $EUID -ne 0 ]]; then
+        error "Run with sudo"
+    fi
 }
 
-# Source yorha-config to get OCI_TAG — the full image reference for
-# this installation. This avoids hardcoding the registry or repo name
-# and works correctly for any flavor built on this base.
-# Temporarily disable set -e while sourcing since yorha-config uses
-# [ ] && || chains that can return non-zero without being errors.
-# shellcheck source=/usr/libexec/yorha-config
-set +e
-. /usr/libexec/yorha-config
-set -e
-IMAGE="${OCI_TAG}:latest"
+# Build the image reference by reading the default values that the
+# Containerfile baked into yorha-config via sed substitutions.
+_cfg=/usr/libexec/yorha-config
+_oci_registry=$(sed -n 's/export OCI_REGISTRY="${OCI_REGISTRY:-\(.*\)}"/\1/p' "$_cfg")
+_gh_account=$(sed -n 's/export GH_ACCOUNT="${GH_ACCOUNT:-\(.*\)}"/\1/p' "$_cfg")
+_gh_project=$(sed -n 's/export GH_PROJECT="${GH_PROJECT:-\(.*\)}"/\1/p' "$_cfg")
+_default_base=$(sed -n 's/export DEFAULT_BASE="${DEFAULT_BASE:-\(.*\)}" #.*/\1/p' "$_cfg")
+IMAGE="${_oci_registry}/${_gh_account}/${_gh_project}/${_default_base}:latest"
 
 # ─────────────────────────────────────────────
 # Shared helpers
 # ─────────────────────────────────────────────
 
-# Remove the old image by ID if the pull replaced it.
-# Uses the ID saved before the pull — no name lookup needed afterward,
-# so this works regardless of what the image is called.
 _cleanup_old_image() {
     local old_id="$1"
     if [[ -z "$old_id" ]]; then
         return
     fi
-    # If the old ID has no repo tags it's now dangling — safe to remove
     local tags
     tags=$(podman inspect --format '{{.RepoTags}}' "$old_id" 2>/dev/null || true)
     if [[ -z "$tags" || "$tags" == "[]" ]]; then
@@ -72,12 +68,9 @@ _resign_secureboot() {
 cmd_system() {
     require_root
 
-    # Save the current image ID before the pull so we can remove it
-    # afterward by ID — no name-based lookup needed after this point
     local old_image_id
     old_image_id=$(podman inspect --format '{{.Id}}' "$IMAGE" 2>/dev/null || true)
 
-    # Pull and deploy the new image
     yorha upgrade remote
 
     _resign_secureboot
@@ -91,7 +84,9 @@ cmd_system() {
 cmd_kargs() {
     require_root
 
-    [[ ! -f "$KARGS_FILE" ]] && error "$KARGS_FILE not found. Cannot apply kernel arguments."
+    if [[ ! -f "$KARGS_FILE" ]]; then
+        error "$KARGS_FILE not found. Cannot apply kernel arguments."
+    fi
 
     info "Applying kernel arguments from $KARGS_FILE..."
 
@@ -120,7 +115,9 @@ cmd_rebase() {
     require_root
 
     local new_image="${1:-}"
-    [[ -z "$new_image" ]] && error "Usage: sudo c22-update rebase <image-url>"
+    if [[ -z "$new_image" ]]; then
+        error "Usage: sudo c22-update rebase <image-url>"
+    fi
 
     info "Rebasing system to $new_image..."
     warn "This will replace your current image source. The next reboot will"
@@ -129,15 +126,12 @@ cmd_rebase() {
     read -r -p "Continue? [y/N] " confirm
     [[ "$confirm" =~ ^[Yy]$ ]] || { echo "Aborted."; exit 0; }
 
-    # Save old image ID for cleanup
     local old_image_id
     old_image_id=$(podman inspect --format '{{.Id}}' "$IMAGE" 2>/dev/null || true)
 
-    # Pull the new image
     info "Pulling $new_image..."
     podman pull "$new_image"
 
-    # Deploy it
     info "Deploying $new_image..."
     yorha upgrade remote "$new_image"
 
@@ -193,8 +187,8 @@ ${BOLD}Examples:${RESET}
 # Main
 # ─────────────────────────────────────────────
 case "${1:-}" in
-    system)        cmd_system ;;
-    kargs)         cmd_kargs  ;;
-    rebase)        cmd_rebase "${2:-}" ;;
-    *)             usage      ;;
+    system)  cmd_system ;;
+    kargs)   cmd_kargs  ;;
+    rebase)  cmd_rebase "${2:-}" ;;
+    *)       usage      ;;
 esac
