@@ -97,11 +97,17 @@ cmd_kargs() {
 
     local karg_flags=""
     for karg in $kargs; do
-        karg_flags="$karg_flags --append=$karg"
+        karg_flags="$karg_flags --karg=$karg"
     done
 
+    # Re-deploy the current branch with the new kargs.
+    # This creates a new staged deployment — the same approach as a
+    # system update but without pulling a new image.
+    local branch
+    branch=$(ostree admin status | grep -m1 "^\* " | grep -o "[^ ]*\/x86_64\/[^ ]*")
     # shellcheck disable=SC2086
-    ostree admin instutil set-kargs --sysroot=/sysroot $karg_flags
+    ostree admin deploy --sysroot=/sysroot --karg-none $karg_flags --os="${OSTREE_STATEROOT:-cache22}" --retain "$branch"
+    grub-mkconfig -o /boot/efi/EFI/grub/grub.cfg
 
     success "Kernel arguments updated. Reboot to apply."
     echo ""
