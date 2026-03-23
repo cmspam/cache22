@@ -43,7 +43,7 @@ jobs:
           ./yorha compose container
           for _image in $OCI_REGISTRY/$GH_ACCOUNT/$GH_PROJECT/$DEFAULT_BASE-base \
             $OCI_REGISTRY/$GH_ACCOUNT/$GH_PROJECT/$DEFAULT_BASE; do
-            podman push --compression-format zstd --compression-level 19 $_image
+            podman push --compression-format zstd:chunked --compression-level 19 $_image
           done
 
       - name: Generate package list and changelog
