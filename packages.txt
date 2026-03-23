@@ -917,7 +917,7 @@ prison 6.24.0-1.1
 procps-ng 4.0.6-1.1
 protobuf 33.1-4.1
 protobuf-c 1.5.2-8.1
-proton-cachyos-slr 1:10.0.20260320-1
+proton-cachyos-slr 1:10.0.20260320-2
 protontricks 1.13.1-3
 psmisc 23.7-1.1
 pulseaudio-qt 1.8.1-1.1

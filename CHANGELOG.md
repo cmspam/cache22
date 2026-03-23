@@ -1,5 +1,13 @@
 # Cache22 Package Changelog
 
+## 2026-03-23 08:14 UTC
+
+### Updated
+
+| Package | From | To |
+|---------|------|----|
+| `proton-cachyos-slr` | 1:10.0.20260320-1 | 1:10.0.20260320-2 |
+
 ## 2026-03-23 06:07 UTC
 
 ### Updated
