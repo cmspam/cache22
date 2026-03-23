@@ -1,5 +1,21 @@
 # Cache22 Package Changelog
 
+## 2026-03-23 06:07 UTC
+
+### Updated
+
+| Package | From | To |
+|---------|------|----|
+| `ki18n` | 6.24.0-1.1 | 6.24.0-2.1 |
+| `kiconthemes` | 6.24.0-1.1 | 6.24.0-2.1 |
+| `kimageformats` | 6.24.0-1.1 | 6.24.0-2.1 |
+| `kio` | 6.24.0-1.1 | 6.24.0-2.1 |
+| `kitemmodels` | 6.24.0-1.1 | 6.24.0-2.1 |
+| `kitemviews` | 6.24.0-1.1 | 6.24.0-2.1 |
+| `syndication` | 6.24.0-1.1 | 6.24.0-2.1 |
+| `syntax-highlighting` | 6.24.0-1.1 | 6.24.0-2.1 |
+| `threadweaver` | 6.24.0-1.1 | 6.24.0-2.1 |
+
 ## 2026-03-23 05:24 UTC
 
 ### Updated
