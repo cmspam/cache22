@@ -106,7 +106,7 @@ The installer will guide you through:
 
 ## Updating
 
-New images are built automatically every week. To update:
+New images are built automatically twice every day. To update:
 ```bash
 sudo c22-update
 sudo reboot
@@ -231,7 +231,7 @@ Deploy a locally built image from within a running Cache22 system:
 sudo yorha upgrade local
 ```
 
-New images are published to `ghcr.io/cmspam/cache22/cachyos` every Friday at 19:00 UTC and on every push to `main`.
+New images are published to `ghcr.io/cmspam/cache22/cachyos` every twice a day and on every push to `main`.
 
 ---
 
