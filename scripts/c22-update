@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 set -e
 
-IMAGE="ghcr.io/cmspam/cache22/cachyos:latest"
 KARGS_FILE="/etc/cache22/kargs"
 
 # ─────────────────────────────────────────────
@@ -19,45 +18,67 @@ require_root() {
     [[ $EUID -ne 0 ]] && error "Run with sudo"
 }
 
+# Source yorha-config to get OCI_TAG — the full image reference for
+# this installation. This avoids hardcoding the registry or repo name
+# and works correctly for any flavor built on this base.
+# shellcheck source=/usr/libexec/yorha-config
+. /usr/libexec/yorha-config
+IMAGE="${OCI_TAG}:latest"
+
 # ─────────────────────────────────────────────
-# Commands
+# Shared helpers
 # ─────────────────────────────────────────────
-cmd_system() {
-    require_root
 
-    # Save the current image ID so we can remove it if it changes
-    local old_image_id
-    old_image_id=$(podman inspect --format '{{.Id}}' "$IMAGE" 2>/dev/null || true)
-
-    # Pull and deploy the new image
-    yorha upgrade remote
-
-    # Re-sign EFI binaries if sbctl is set up
-    if sbctl status 2>/dev/null | grep -q "Installed: ✓"; then
-        info "Re-signing EFI binaries with sbctl..."
-        sbctl sign-all
+# Remove the old image by ID if the pull replaced it.
+# Uses the ID saved before the pull — no name lookup needed afterward,
+# so this works regardless of what the image is called.
+_cleanup_old_image() {
+    local old_id="$1"
+    if [[ -z "$old_id" ]]; then
+        return
     fi
-
-    # Remove the old cache22 image if it was replaced.
-    # Only removes the specific old image by ID — user's own podman
-    # images are never touched.
-    if [[ -n "$old_image_id" ]]; then
-        local new_image_id
-        new_image_id=$(podman inspect --format '{{.Id}}' "$IMAGE" 2>/dev/null || true)
-        if [[ "$old_image_id" != "$new_image_id" ]]; then
-            info "Removing previous cache22 image..."
-            podman rmi -f "$old_image_id" 2>/dev/null || true
-        fi
+    # If the old ID has no repo tags it's now dangling — safe to remove
+    local tags
+    tags=$(podman inspect --format '{{.RepoTags}}' "$old_id" 2>/dev/null || true)
+    if [[ -z "$tags" || "$tags" == "[]" ]]; then
+        info "Removing previous image (${old_id:0:12})..."
+        podman rmi -f "$old_id" 2>/dev/null || true
     fi
+}
 
-    # Prune OSTree deployments down to two —
-    # the currently booted deployment and one rollback.
+_cleanup_deployments() {
     local deployment_count
     deployment_count=$(ostree admin status | grep -c "^\*\? " 2>/dev/null || echo 0)
     if [[ "$deployment_count" -gt 2 ]]; then
         info "Pruning old OSTree deployments (keeping 2)..."
         ostree admin cleanup
     fi
+}
+
+_resign_secureboot() {
+    if sbctl status 2>/dev/null | grep -q "Installed: ✓"; then
+        info "Re-signing EFI binaries with sbctl..."
+        sbctl sign-all
+    fi
+}
+
+# ─────────────────────────────────────────────
+# Commands
+# ─────────────────────────────────────────────
+cmd_system() {
+    require_root
+
+    # Save the current image ID before the pull so we can remove it
+    # afterward by ID — no name-based lookup needed after this point
+    local old_image_id
+    old_image_id=$(podman inspect --format '{{.Id}}' "$IMAGE" 2>/dev/null || true)
+
+    # Pull and deploy the new image
+    yorha upgrade remote
+
+    _resign_secureboot
+    _cleanup_old_image "$old_image_id"
+    _cleanup_deployments
 
     success "Update complete. Reboot to use the new deployment."
     echo "    Run: sudo yorha deployment list — to see available deployments."
@@ -75,7 +96,6 @@ cmd_kargs() {
         [[ -n "$karg" ]] && kargs="$kargs $karg"
     done < "$KARGS_FILE"
 
-    # Build the --karg flags for ostree
     local karg_flags=""
     for karg in $kargs; do
         karg_flags="$karg_flags --karg=$karg"
@@ -92,6 +112,39 @@ cmd_kargs() {
     done < "$KARGS_FILE"
 }
 
+cmd_rebase() {
+    require_root
+
+    local new_image="${1:-}"
+    [[ -z "$new_image" ]] && error "Usage: sudo c22-update rebase <image-url>"
+
+    info "Rebasing system to $new_image..."
+    warn "This will replace your current image source. The next reboot will"
+    warn "use the new image. Your /etc and /var are preserved."
+    echo ""
+    read -r -p "Continue? [y/N] " confirm
+    [[ "$confirm" =~ ^[Yy]$ ]] || { echo "Aborted."; exit 0; }
+
+    # Save old image ID for cleanup
+    local old_image_id
+    old_image_id=$(podman inspect --format '{{.Id}}' "$IMAGE" 2>/dev/null || true)
+
+    # Pull the new image
+    info "Pulling $new_image..."
+    podman pull "$new_image"
+
+    # Deploy it
+    info "Deploying $new_image..."
+    yorha upgrade remote "$new_image"
+
+    _resign_secureboot
+    _cleanup_old_image "$old_image_id"
+    _cleanup_deployments
+
+    success "Rebase complete. Reboot to use the new image."
+    echo "    New image: $new_image"
+}
+
 # ─────────────────────────────────────────────
 # Usage
 # ─────────────────────────────────────────────
@@ -100,17 +153,22 @@ usage() {
 ${BOLD}c22-update${RESET} — Cache22 update utility
 
 ${BOLD}Usage:${RESET}
-  sudo c22-update <command>
+  sudo c22-update <command> [options]
 
 ${BOLD}Commands:${RESET}
-  system    Pull the latest image and deploy it as a new OSTree deployment.
-            The previous deployment is kept as a rollback target.
-            Reboot to use the new deployment.
+  system          Pull the latest image and deploy it as a new OSTree
+                  deployment. The previous deployment is kept as a rollback
+                  target. Reboot to use the new deployment.
 
-  kargs     Apply the current contents of /etc/cache22/kargs to the running
-            deployment without doing a full system update. Edit that file
-            to add or remove kernel arguments, then run this command.
-            Reboot to apply.
+  kargs           Apply the current contents of /etc/cache22/kargs to the
+                  running deployment without doing a full system update.
+                  Edit that file to add or remove kernel arguments, then
+                  run this command. Reboot to apply.
+
+  rebase <url>    Switch to a different image. Pulls the image at <url>,
+                  deploys it, and makes it the new update source.
+                  Your /etc and /var are preserved across the rebase.
+                  Reboot to use the new image.
 
 ${BOLD}Examples:${RESET}
   sudo c22-update system
@@ -120,6 +178,9 @@ ${BOLD}Examples:${RESET}
   echo \"i8042.reset=1\" | sudo tee -a /etc/cache22/kargs
   sudo c22-update kargs
   sudo reboot
+
+  # Switch to a different flavor:
+  sudo c22-update rebase ghcr.io/cmspam/cache22/cachyos-gnome:latest
 "
     exit 0
 }
@@ -128,7 +189,8 @@ ${BOLD}Examples:${RESET}
 # Main
 # ─────────────────────────────────────────────
 case "${1:-}" in
-    system) cmd_system ;;
-    kargs)  cmd_kargs  ;;
-    *)      usage      ;;
+    system)        cmd_system ;;
+    kargs)         cmd_kargs  ;;
+    rebase)        cmd_rebase "${2:-}" ;;
+    *)             usage      ;;
 esac

@@ -114,14 +114,25 @@ RUN pacman --noconfirm -Rdd mesa 2>/dev/null || true && \
         egl-wayland libva-nvidia-driver \
         vulkan-icd-loader lib32-vulkan-icd-loader \
         lib32-vulkan-radeon lib32-vulkan-intel \
-        gvfs gvfs-mtp gvfs-smb gvfs-nfs
+        gvfs gvfs-mtp gvfs-smb gvfs-nfs && \
+    { \
+        echo "nvidia-drm.modeset=1"; \
+        echo "nvidia-drm.fbdev=1"; \
+        echo "modprobe.blacklist=nouveau"; \
+        echo "rd.driver.blacklist=nouveau"; \
+    } >> /etc/cache22/kargs
 
 # ── Layer 6: Gaming (changes when Steam/gamescope/etc update) ──
 RUN pacman --noconfirm --needed -S \
         cachyos-gaming-applications gamescope-session-cachyos sunshine \
         supergfxctl plasma6-applets-supergfxctl
 
-# ── Layer 7: Virtualization and containers (changes occasionally) ──
+# ── Layer 7: ASUS hardware support ──
+RUN pacman --noconfirm --needed -S \
+        asusctl && \
+    systemctl enable asusd.service
+
+# ── Layer 8: Virtualization and containers (changes occasionally) ──
 RUN pacman --noconfirm --needed -S \
         toolbox distrobox incus incus-tools incus-ui \
         qemu-desktop \
@@ -130,54 +141,19 @@ RUN pacman --noconfirm --needed -S \
     flatpak remote-add --if-not-exists flathub \
         https://dl.flathub.org/repo/flathub.flatpakrepo
 
-# ── Layer 8: System configuration (changes with repo/config updates) ──
-RUN echo "%wheel ALL=(ALL) ALL" > /etc/sudoers.d/10-wheel && \
-    echo "%wheel ALL=NOPASSWD: /usr/bin/ostree" > /etc/sudoers.d/20-ostree && \
-    { \
-        echo "Cmnd_Alias YORHA = /usr/bin/yorha \"\",/usr/bin/yorha compose *,/usr/bin/yorha upgrade *,/usr/bin/yorha deployment *"; \
-        echo "Defaults!YORHA env_keep +=YORHA_BASE_PATH"; \
-        echo "Defaults!YORHA env_keep +=YORHA_LIBEXEC_PATH"; \
-        echo "Defaults!YORHA env_keep +=OSTREE_STATEROOT"; \
-        echo "Defaults!YORHA env_keep +=OSTREE_BRANCH"; \
-        echo "%wheel ALL=NOPASSWD: YORHA"; \
-    } > /etc/sudoers.d/30-yorha && \
-    echo "root:1000000:65536" >> /etc/subuid && \
-    echo "root:1000000:65536" >> /etc/subgid && \
-    mkdir -p /usr/share/cache22 && \
-    mkdir -p /etc/cache22 && \
-    { \
-        echo "quiet"; \
-        echo "loglevel=3"; \
-        echo "systemd.show_status=auto"; \
-        echo "rd.udev.log_level=3"; \
-        echo "nvidia-drm.modeset=1"; \
-        echo "nvidia-drm.fbdev=1"; \
-        echo "modprobe.blacklist=nouveau"; \
-        echo "rd.driver.blacklist=nouveau"; \
-    } > /etc/cache22/kargs && \
-    pacman -Scc --noconfirm
-
-# ── Layer 9: Yorha tooling and scripts (changes with repo commits) ──
-COPY yorha /usr/bin/yorha
-COPY base /usr/share/cache22/base
-COPY libexec /usr/libexec
+# ── Layer 9: Deck scripts (KDE/gamescope specific) ──
 COPY scripts/c22-deck-enable /usr/bin/c22-deck-enable
 COPY scripts/c22-deck-disable /usr/bin/c22-deck-disable
-COPY scripts/c22-update /usr/bin/c22-update
-COPY scripts/c22-setup-secureboot /usr/bin/c22-setup-secureboot
+RUN chmod +x /usr/bin/c22-deck-enable /usr/bin/c22-deck-disable
 
+# ── Layer 10: Image identity and registry config (changes with repo commits) ──
 ARG IMAGE
-RUN sed -i "s|libexec|/usr/libexec|" /usr/bin/yorha && \
-    sed -i "s|YORHA_BASE_PATH:-|YORHA_BASE_PATH:-/usr/share/cache22/|" \
-        /usr/libexec/yorha-config && \
-    sed -i "s|OCI_REGISTRY:-localhost|OCI_REGISTRY:-ghcr.io|" \
+RUN sed -i "s|OCI_REGISTRY:-localhost|OCI_REGISTRY:-ghcr.io|" \
         /usr/libexec/yorha-config && \
     sed -i "s|GH_ACCOUNT:-lcook|GH_ACCOUNT:-cmspam|" \
         /usr/libexec/yorha-config && \
     sed -i "s|GH_PROJECT:-yorha|GH_PROJECT:-cache22|" \
         /usr/libexec/yorha-config && \
-    chmod +x /usr/bin/c22-deck-enable /usr/bin/c22-deck-disable \
-              /usr/bin/c22-update /usr/bin/c22-setup-secureboot && \
     IMAGE=$(echo $IMAGE | sed "s|-base||") && \
     DATE=$(date +%Y%m%d.%H%M) && \
     { \
@@ -188,6 +164,7 @@ RUN sed -i "s|libexec|/usr/libexec|" /usr/bin/yorha && \
         echo "VERSION=$DATE"; \
         echo "IMAGE=$IMAGE"; \
     } > /usr/lib/os-release && \
-    ln -sf ../usr/lib/os-release /etc/os-release
+    ln -sf ../usr/lib/os-release /etc/os-release && \
+    pacman -Scc --noconfirm
 
 ENTRYPOINT ["/bin/bash"]

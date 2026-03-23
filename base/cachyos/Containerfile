@@ -37,3 +37,40 @@ RUN pacman-key --init && pacman-key --populate archlinux cachyos && \
 RUN moduledir=$(find /usr/lib/modules -mindepth 1 -maxdepth 1 -type d) && \
     kernel=$(cat ${moduledir}/pkgbase) && \
     cat /boot/*-ucode.img /boot/initramfs-${kernel}.img > ${moduledir}/initramfs.img
+
+# ── Sudoers and subuid/subgid for rootless containers ──
+RUN echo "%wheel ALL=(ALL) ALL" > /etc/sudoers.d/10-wheel && \
+    echo "%wheel ALL=NOPASSWD: /usr/bin/ostree" > /etc/sudoers.d/20-ostree && \
+    { \
+        echo "Cmnd_Alias YORHA = /usr/bin/yorha \"\",/usr/bin/yorha compose *,/usr/bin/yorha upgrade *,/usr/bin/yorha deployment *"; \
+        echo "Defaults!YORHA env_keep +=YORHA_BASE_PATH"; \
+        echo "Defaults!YORHA env_keep +=YORHA_LIBEXEC_PATH"; \
+        echo "Defaults!YORHA env_keep +=OSTREE_STATEROOT"; \
+        echo "Defaults!YORHA env_keep +=OSTREE_BRANCH"; \
+        echo "%wheel ALL=NOPASSWD: YORHA"; \
+    } > /etc/sudoers.d/30-yorha && \
+    echo "root:1000000:65536" >> /etc/subuid && \
+    echo "root:1000000:65536" >> /etc/subgid
+
+# ── Default kernel arguments ──
+RUN mkdir -p /etc/cache22 && \
+    { \
+        echo "quiet"; \
+        echo "loglevel=3"; \
+        echo "systemd.show_status=auto"; \
+        echo "rd.udev.log_level=3"; \
+    } > /etc/cache22/kargs
+
+# ── Yorha tooling — available to all images built on this base ──
+COPY yorha /usr/bin/yorha
+COPY base /usr/share/cache22/base
+COPY libexec /usr/libexec
+COPY scripts/c22-update /usr/bin/c22-update
+COPY scripts/c22-setup-secureboot /usr/bin/c22-setup-secureboot
+
+RUN mkdir -p /usr/share/cache22 && \
+    sed -i "s|libexec|/usr/libexec|" /usr/bin/yorha && \
+    sed -i "s|YORHA_BASE_PATH:-|YORHA_BASE_PATH:-/usr/share/cache22/|" \
+        /usr/libexec/yorha-config && \
+    chmod +x /usr/bin/c22-update \
+              /usr/bin/c22-setup-secureboot
