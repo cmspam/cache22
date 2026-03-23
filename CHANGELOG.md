@@ -1,5 +1,31 @@
 # Cache22 Package Changelog
 
+## 2026-03-23 10:52 UTC
+
+### Updated
+
+| Package | From | To |
+|---------|------|----|
+| `kwidgetsaddons` | 6.24.0-1.1 | 6.24.0-2.1 |
+| `kxmlgui` | 6.24.0-1.1 | 6.24.0-2.1 |
+| `libaccounts-qt` | 1.17-1.1 | 1.17-2.1 |
+| `libblockdev` | 3.4.0-2.1 | 3.4.0-3.1 |
+| `libblockdev-crypto` | 3.4.0-2.1 | 3.4.0-3.1 |
+| `libblockdev-fs` | 3.4.0-2.1 | 3.4.0-3.1 |
+| `libblockdev-loop` | 3.4.0-2.1 | 3.4.0-3.1 |
+| `libblockdev-mdraid` | 3.4.0-2.1 | 3.4.0-3.1 |
+| `libblockdev-nvme` | 3.4.0-2.1 | 3.4.0-3.1 |
+| `libblockdev-part` | 3.4.0-2.1 | 3.4.0-3.1 |
+| `libblockdev-smart` | 3.4.0-2.1 | 3.4.0-3.1 |
+| `libblockdev-swap` | 3.4.0-2.1 | 3.4.0-3.1 |
+| `modemmanager-qt` | 6.24.0-1.1 | 6.24.0-2.1 |
+
+### Added
+
+| Package | Version |
+|---------|--------|
+| `tmux` | 3.6_a-1.1 |
+
 ## 2026-03-23 10:06 UTC
 
 ### Updated
