@@ -1,43 +1,134 @@
 #!/usr/bin/env bash
 set -e
 
-if [[ $EUID -ne 0 ]]; then
-    echo "Run with sudo"
-    exit 1
-fi
-
 IMAGE="ghcr.io/cmspam/cache22/cachyos:latest"
+KARGS_FILE="/etc/cache22/kargs"
 
-# ── Save the current cache22 image ID so we can remove it after the pull ──
-_old_image_id=$(podman inspect --format '{{.Id}}' "$IMAGE" 2>/dev/null || true)
+# ─────────────────────────────────────────────
+# Helpers
+# ─────────────────────────────────────────────
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
+BLUE='\033[0;34m'; BOLD='\033[1m'; RESET='\033[0m'
 
-# ── Pull and deploy the new image ──
-yorha upgrade remote
+info()    { echo -e "${BLUE}==>${RESET} ${BOLD}$*${RESET}"; }
+success() { echo -e "${GREEN}==>${RESET} ${BOLD}$*${RESET}"; }
+warn()    { echo -e "${YELLOW}==>${RESET} $*"; }
+error()   { echo -e "${RED}==>${RESET} ${BOLD}$*${RESET}" >&2; exit 1; }
 
-# ── Re-sign EFI binaries if sbctl is set up ──
-if sbctl status 2>/dev/null | grep -q "Installed: ✓"; then
-    echo "==> Re-signing EFI binaries with sbctl..."
-    sbctl sign-all
-fi
+require_root() {
+    [[ $EUID -ne 0 ]] && error "Run with sudo"
+}
 
-# ── Remove the old cache22 image if it was replaced ──
-# Only removes the specific old cache22 image by ID, leaving any images
-# the user has pulled with podman completely untouched.
-if [[ -n "$_old_image_id" ]]; then
-    _new_image_id=$(podman inspect --format '{{.Id}}' "$IMAGE" 2>/dev/null || true)
-    if [[ "$_old_image_id" != "$_new_image_id" ]]; then
-        echo "==> Removing previous cache22 image..."
-        podman rmi -f "$_old_image_id" 2>/dev/null || true
+# ─────────────────────────────────────────────
+# Commands
+# ─────────────────────────────────────────────
+cmd_system() {
+    require_root
+
+    # Save the current image ID so we can remove it if it changes
+    local old_image_id
+    old_image_id=$(podman inspect --format '{{.Id}}' "$IMAGE" 2>/dev/null || true)
+
+    # Pull and deploy the new image
+    yorha upgrade remote
+
+    # Re-sign EFI binaries if sbctl is set up
+    if sbctl status 2>/dev/null | grep -q "Installed: ✓"; then
+        info "Re-signing EFI binaries with sbctl..."
+        sbctl sign-all
     fi
-fi
 
-# ── Prune OSTree deployments down to two ──
-# Keeps the currently booted deployment and one rollback.
-_deployment_count=$(ostree admin status | grep -c "^\*\? " 2>/dev/null || echo 0)
-if [[ "$_deployment_count" -gt 2 ]]; then
-    echo "==> Pruning old OSTree deployments (keeping 2)..."
-    ostree admin cleanup
-fi
+    # Remove the old cache22 image if it was replaced.
+    # Only removes the specific old image by ID — user's own podman
+    # images are never touched.
+    if [[ -n "$old_image_id" ]]; then
+        local new_image_id
+        new_image_id=$(podman inspect --format '{{.Id}}' "$IMAGE" 2>/dev/null || true)
+        if [[ "$old_image_id" != "$new_image_id" ]]; then
+            info "Removing previous cache22 image..."
+            podman rmi -f "$old_image_id" 2>/dev/null || true
+        fi
+    fi
 
-echo "==> Update complete. Reboot to use the new deployment."
-echo "    Run: sudo yorha deployment list — to see available deployments."
+    # Prune OSTree deployments down to two —
+    # the currently booted deployment and one rollback.
+    local deployment_count
+    deployment_count=$(ostree admin status | grep -c "^\*\? " 2>/dev/null || echo 0)
+    if [[ "$deployment_count" -gt 2 ]]; then
+        info "Pruning old OSTree deployments (keeping 2)..."
+        ostree admin cleanup
+    fi
+
+    success "Update complete. Reboot to use the new deployment."
+    echo "    Run: sudo yorha deployment list — to see available deployments."
+}
+
+cmd_kargs() {
+    require_root
+
+    [[ ! -f "$KARGS_FILE" ]] && error "$KARGS_FILE not found. Cannot apply kernel arguments."
+
+    info "Applying kernel arguments from $KARGS_FILE..."
+
+    local kargs="root=LABEL=SYS_ROOT rw"
+    while IFS= read -r karg; do
+        [[ -n "$karg" ]] && kargs="$kargs $karg"
+    done < "$KARGS_FILE"
+
+    # Build the --karg flags for ostree
+    local karg_flags=""
+    for karg in $kargs; do
+        karg_flags="$karg_flags --karg=$karg"
+    done
+
+    # shellcheck disable=SC2086
+    ostree admin kargs --sysroot=/sysroot --karg-none $karg_flags
+
+    success "Kernel arguments updated. Reboot to apply."
+    echo ""
+    echo "    Current arguments:"
+    while IFS= read -r karg; do
+        [[ -n "$karg" ]] && echo "      $karg"
+    done < "$KARGS_FILE"
+}
+
+# ─────────────────────────────────────────────
+# Usage
+# ─────────────────────────────────────────────
+usage() {
+    echo -e "
+${BOLD}c22-update${RESET} — Cache22 update utility
+
+${BOLD}Usage:${RESET}
+  sudo c22-update <command>
+
+${BOLD}Commands:${RESET}
+  system    Pull the latest image and deploy it as a new OSTree deployment.
+            The previous deployment is kept as a rollback target.
+            Reboot to use the new deployment.
+
+  kargs     Apply the current contents of /etc/cache22/kargs to the running
+            deployment without doing a full system update. Edit that file
+            to add or remove kernel arguments, then run this command.
+            Reboot to apply.
+
+${BOLD}Examples:${RESET}
+  sudo c22-update system
+  sudo c22-update kargs
+
+  # Add a kernel argument and apply it:
+  echo \"i8042.reset=1\" | sudo tee -a /etc/cache22/kargs
+  sudo c22-update kargs
+  sudo reboot
+"
+    exit 0
+}
+
+# ─────────────────────────────────────────────
+# Main
+# ─────────────────────────────────────────────
+case "${1:-}" in
+    system) cmd_system ;;
+    kargs)  cmd_kargs  ;;
+    *)      usage      ;;
+esac

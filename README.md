@@ -108,11 +108,11 @@ The installer will guide you through:
 
 New images are built automatically twice every day. To update:
 ```bash
-sudo c22-update
+sudo c22-update system
 sudo reboot
 ```
 
-The new image is pulled from GHCR, committed to the local OSTree repository, and staged for the next boot. Your previous deployment is retained as a rollback target.
+The new image is pulled from GHCR, committed to the local OSTree repository, and staged for the next boot. Your previous deployment is retained as a rollback target. The old container image is automatically cleaned up from podman storage after a successful update.
 
 ### Rolling Back
 
@@ -127,6 +127,30 @@ sudo reboot
 
 **From the GRUB menu:**
 Select the previous deployment entry at boot. No commands needed.
+
+---
+
+## Kernel Arguments
+
+Cache22 stores kernel arguments in `/etc/cache22/kargs` — one argument per line. This file is yours to edit. Changes survive system updates automatically.
+
+To view your current kernel arguments:
+```bash
+cat /etc/cache22/kargs
+```
+
+To add a kernel argument:
+```bash
+echo "i8042.reset=1" | sudo tee -a /etc/cache22/kargs
+```
+
+To apply your changes without doing a full system update:
+```bash
+sudo c22-update kargs
+sudo reboot
+```
+
+Changes are also applied automatically as part of `sudo c22-update system`.
 
 ---
 
@@ -178,7 +202,7 @@ sbctl status
 
 ### Staying signed after updates
 
-`c22-update` automatically re-signs all registered EFI binaries and kernels after each update if sbctl is configured. No manual action required.
+`c22-update system` automatically re-signs all registered EFI binaries and kernels after each update if sbctl is configured. No manual action required.
 
 ---
 
@@ -231,7 +255,7 @@ Deploy a locally built image from within a running Cache22 system:
 sudo yorha upgrade local
 ```
 
-New images are published to `ghcr.io/cmspam/cache22/cachyos` every twice a day and on every push to `main`.
+New images are published to `ghcr.io/cmspam/cache22/cachyos` twice a day and on every push to `main`.
 
 ---
 

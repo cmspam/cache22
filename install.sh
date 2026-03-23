@@ -567,12 +567,15 @@ do_install() {
         --branch=cache22/x86_64/standard \
         --tree=dir=/mnt/setup/rootfs
 
-    # Build kernel arguments
+    # Build kernel arguments from the image'''s /etc/cache22/kargs.
+    # The LUKS karg is added separately by _write_etc_files into the
+    # deployment live /etc — but we still need it here for the initial
+    # deploy so the system can boot and unlock /var on first boot.
     local kargs="root=LABEL=SYS_ROOT rw"
-    if [[ -f /mnt/setup/rootfs/usr/share/cache22/.karg ]]; then
+    if [[ -f /mnt/setup/rootfs/etc/cache22/kargs ]]; then
         while IFS= read -r karg; do
             [[ -n "$karg" ]] && kargs="$kargs $karg"
-        done < /mnt/setup/rootfs/usr/share/cache22/.karg
+        done < /mnt/setup/rootfs/etc/cache22/kargs
     fi
 
     # Add LUKS unlock arg if encrypted
@@ -743,6 +746,30 @@ _write_etc_files() {
     # crypttab — only written for encrypted installs
     if [[ "$ENCRYPT_VAR" == true ]]; then
         echo "sys_var  LABEL=SYS_VAR_CRYPT  none  luks,timeout=90" > "$etc/crypttab"
+    fi
+
+    # Kernel arguments — write into the deployment live /etc so OSTree'''s
+    # 3-way merge carries user edits forward across upgrades automatically,
+    # exactly like fstab and hostname. The image'''s /etc/cache22/kargs
+    # provides the defaults but this live copy is what the system uses.
+    mkdir -p "$etc/cache22"
+    {
+        echo "quiet"
+        echo "loglevel=3"
+        echo "systemd.show_status=auto"
+        echo "rd.udev.log_level=3"
+        echo "nvidia-drm.modeset=1"
+        echo "nvidia-drm.fbdev=1"
+        echo "modprobe.blacklist=nouveau"
+        echo "rd.driver.blacklist=nouveau"
+    } > "$etc/cache22/kargs"
+
+    # Append LUKS karg if encrypted — machine-specific so it belongs here
+    # alongside the other kargs rather than being handled separately.
+    if [[ "$ENCRYPT_VAR" == true ]]; then
+        local luks_uuid
+        luks_uuid=$(cryptsetup luksUUID "$(readlink -f "$PART_VAR")")
+        echo "rd.luks.name=${luks_uuid}=sys_var" >> "$etc/cache22/kargs"
     fi
 
     success "Machine-specific /etc files written"

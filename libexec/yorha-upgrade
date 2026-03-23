@@ -153,11 +153,18 @@ _ostree_deploy_image ()
   run ostree commit --repo="$OSTREE_SYS_ROOT/ostree/repo" --branch="$OSTREE_BRANCH" --tree=dir="$OSTREE_SYS_TREE"
 
   _kargs="root=LABEL=$OSTREE_SYS_ROOT_LABEL rw"
-  [ -f "$OSTREE_SYS_TREE"/usr/share/cache22/.karg ] && {
-      while read -r _karg; do
-        _kargs="$_kargs $_karg"
-      done < "$OSTREE_SYS_TREE"/usr/share/cache22/.karg
-  }
+
+  # Read kargs from the running system'''s /etc/cache22/kargs.
+  # This file is seeded at install time and carried forward by OSTree'''s
+  # 3-way merge on every upgrade, preserving any user edits automatically.
+  if [ -f /etc/cache22/kargs ]; then
+    while read -r _karg; do
+      [ -n "$_karg" ] && _kargs="$_kargs $_karg"
+    done < /etc/cache22/kargs
+  else
+    error "/etc/cache22/kargs not found — cannot determine kernel arguments"
+  fi
+
   run ostree admin deploy --sysroot="$OSTREE_SYS_ROOT" --karg-none --karg="$_kargs" --os="$OSTREE_STATEROOT" --retain "$OSTREE_BRANCH"
 
   [ -d /ostree ] && run grub-mkconfig -o /boot/efi/EFI/grub/grub.cfg || :

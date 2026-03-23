@@ -144,6 +144,7 @@ RUN echo "%wheel ALL=(ALL) ALL" > /etc/sudoers.d/10-wheel && \
     echo "root:1000000:65536" >> /etc/subuid && \
     echo "root:1000000:65536" >> /etc/subgid && \
     mkdir -p /usr/share/cache22 && \
+    mkdir -p /etc/cache22 && \
     { \
         echo "quiet"; \
         echo "loglevel=3"; \
@@ -153,7 +154,7 @@ RUN echo "%wheel ALL=(ALL) ALL" > /etc/sudoers.d/10-wheel && \
         echo "nvidia-drm.fbdev=1"; \
         echo "modprobe.blacklist=nouveau"; \
         echo "rd.driver.blacklist=nouveau"; \
-    } > /usr/share/cache22/.karg && \
+    } > /etc/cache22/kargs && \
     pacman -Scc --noconfirm
 
 # ── Layer 9: Yorha tooling and scripts (changes with repo commits) ──
