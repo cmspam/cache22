@@ -97,11 +97,11 @@ cmd_kargs() {
 
     local karg_flags=""
     for karg in $kargs; do
-        karg_flags="$karg_flags --karg=$karg"
+        karg_flags="$karg_flags --append=$karg"
     done
 
     # shellcheck disable=SC2086
-    ostree admin kargs --sysroot=/sysroot --karg-none $karg_flags
+    ostree admin instutil set-kargs --sysroot=/sysroot $karg_flags
 
     success "Kernel arguments updated. Reboot to apply."
     echo ""
