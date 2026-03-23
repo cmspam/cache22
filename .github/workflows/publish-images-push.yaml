@@ -8,7 +8,8 @@ on:
       - 'scripts/**'
       - 'libexec/**'
       - 'yorha'
-    workflow_dispatch:
+  workflow_dispatch:
+
 env:
   OCI_REGISTRY: ghcr.io
   GH_ACCOUNT: ${{ github.actor }}
