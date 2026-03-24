@@ -1,5 +1,14 @@
 # Cache22 Package Changelog
 
+## 2026-03-24 08:14 UTC
+
+### Updated
+
+| Package | From | To |
+|---------|------|----|
+| `freetype2` | 2.14.2-1.1 | 2.14.3-1.1 |
+| `leancrypto` | 1.6.0-1.1 | 1.7.0-1.1 |
+
 ## 2026-03-24 02:15 UTC
 
 ### Updated

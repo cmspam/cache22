@@ -165,7 +165,7 @@ fontconfig 2:2.17.1-1.1
 frameworkintegration 6.24.0-2.1
 freeglut 3.8.0-1.1
 freerdp 2:3.24.1-1.1
-freetype2 2.14.2-1.1
+freetype2 2.14.3-1.1
 fribidi 1.0.16-2.1
 fuse-common 3.18.2-1.1
 fuse3 3.18.2-1.1
@@ -367,7 +367,7 @@ lapack 3.12.1-2.1
 layer-shell-qt 6.6.3-1.1
 lcms2 2.18-1.1
 ldb 2:4.24.0-1.1
-leancrypto 1.6.0-1.1
+leancrypto 1.7.0-1.1
 less 1:692-1.1
 lib32-acl 2.3.2-1
 lib32-alsa-lib 1.2.15.3-1
