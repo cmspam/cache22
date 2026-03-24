@@ -106,9 +106,7 @@ RUN pacman --noconfirm --needed -S \
     } > /etc/environment.d/fcitx5.conf
 
 # ── Layer 5: GPU drivers and Vulkan (changes when mesa/nvidia update) ──
-RUN pacman --noconfirm -Rdd mesa 2>/dev/null || true && \
-    pacman --noconfirm --needed -S \
-        mesa-git \
+RUN     pacman --noconfirm --needed -S \
         intel-media-driver libvpl vpl-gpu-rt \
         linux-cachyos-nvidia-open nvidia-utils nvidia-settings \
         egl-wayland libva-nvidia-driver \
