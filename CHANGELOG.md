@@ -1,5 +1,87 @@
 # Cache22 Package Changelog
 
+## 2026-03-24 02:15 UTC
+
+### Updated
+
+| Package | From | To |
+|---------|------|----|
+| `ffmpeg` | 2:8.1-2.1 | 2:8.1-3.1 |
+| `gst-plugins-bad-libs` | 1.28.1-1 | 1.28.1-2.1 |
+| `gst-plugins-base` | 1.28.1-1 | 1.28.1-2.1 |
+| `gst-plugins-base-libs` | 1.28.1-1 | 1.28.1-2.1 |
+| `gstreamer` | 1.28.1-1 | 1.28.1-2.1 |
+| `lib32-gst-plugins-base-libs` | 1.28.1-1 | 1.28.1-2 |
+| `lib32-gstreamer` | 1.28.1-1 | 1.28.1-2 |
+| `lib32-systemd` | 260-1 | 260.1-1 |
+| `libinput` | 1.30.1-1.1 | 1.31.0-1 |
+| `libopenmpt` | 0.8.4-1.1 | 0.8.5-1.1 |
+| `libvlc` | 3.0.21-32.1 | 3.0.22-1.1 |
+| `libvpx` | 1.15.2-3.1 | 1.16.0-2.1 |
+| `libwireplumber` | 0.5.13-1.1 | 0.5.13-2.2 |
+| `lua` | 5.4.8-2.1 | 5.5.0-2.2 |
+| `networkmanager-qt` | 6.24.0-1.1 | 6.24.0-2.1 |
+| `phonon-qt6` | 4.12.0-5 | 4.12.0-6 |
+| `phonon-qt6-vlc` | 0.12.0-5 | 0.12.0-6 |
+| `polkit-qt6` | 0.200.0-1 | 0.200.0-2 |
+| `prison` | 6.24.0-1.1 | 6.24.0-2.1 |
+| `purpose` | 6.24.0-1.1 | 6.24.0-2.1 |
+| `qqc2-desktop-style` | 6.24.0-1.1 | 6.24.0-2.1 |
+| `qt6-webengine` | 6.10.2-1 | 6.10.2-2 |
+| `solid` | 6.24.0-1.1 | 6.24.0-2.1 |
+| `sonnet` | 6.24.0-1.1 | 6.24.0-2.1 |
+| `source-highlight` | 3.1.9-16.1 | 3.1.9-16.2 |
+| `syntax-highlighting` | 6.24.0-2.1 | 6.24.0-2.2 |
+| `systemd` | 260-1 | 260.1-1 |
+| `systemd-libs` | 260-1 | 260.1-1 |
+| `systemd-sysvcompat` | 260-1 | 260.1-1 |
+| `vim` | 9.2.0204-1.1 | 9.2.0204-2.2 |
+| `vim-runtime` | 9.2.0204-1.1 | 9.2.0204-2.2 |
+| `vlc-plugin-a52dec` | 3.0.21-32.1 | 3.0.22-1.1 |
+| `vlc-plugin-alsa` | 3.0.21-32.1 | 3.0.22-1.1 |
+| `vlc-plugin-archive` | 3.0.21-32.1 | 3.0.22-1.1 |
+| `vlc-plugin-dav1d` | 3.0.21-32.1 | 3.0.22-1.1 |
+| `vlc-plugin-dbus` | 3.0.21-32.1 | 3.0.22-1.1 |
+| `vlc-plugin-dbus-screensaver` | 3.0.21-32.1 | 3.0.22-1.1 |
+| `vlc-plugin-faad2` | 3.0.21-32.1 | 3.0.22-1.1 |
+| `vlc-plugin-flac` | 3.0.21-32.1 | 3.0.22-1.1 |
+| `vlc-plugin-gnutls` | 3.0.21-32.1 | 3.0.22-1.1 |
+| `vlc-plugin-inflate` | 3.0.21-32.1 | 3.0.22-1.1 |
+| `vlc-plugin-journal` | 3.0.21-32.1 | 3.0.22-1.1 |
+| `vlc-plugin-jpeg` | 3.0.21-32.1 | 3.0.22-1.1 |
+| `vlc-plugin-mpg123` | 3.0.21-32.1 | 3.0.22-1.1 |
+| `vlc-plugin-ogg` | 3.0.21-32.1 | 3.0.22-1.1 |
+| `vlc-plugin-opus` | 3.0.21-32.1 | 3.0.22-1.1 |
+| `vlc-plugin-png` | 3.0.21-32.1 | 3.0.22-1.1 |
+| `vlc-plugin-shout` | 3.0.21-32.1 | 3.0.22-1.1 |
+| `vlc-plugin-speex` | 3.0.21-32.1 | 3.0.22-1.1 |
+| `vlc-plugin-tag` | 3.0.21-32.1 | 3.0.22-1.1 |
+| `vlc-plugin-theora` | 3.0.21-32.1 | 3.0.22-1.1 |
+| `vlc-plugin-twolame` | 3.0.21-32.1 | 3.0.22-1.1 |
+| `vlc-plugin-vorbis` | 3.0.21-32.1 | 3.0.22-1.1 |
+| `vlc-plugin-vpx` | 3.0.21-32.1 | 3.0.22-1.1 |
+| `vlc-plugin-xml` | 3.0.21-32.1 | 3.0.22-1.1 |
+| `vlc-plugins-base` | 3.0.21-32.1 | 3.0.22-1.1 |
+| `wireplumber` | 0.5.13-1.1 | 0.5.13-2.2 |
+
+### Added
+
+| Package | Version |
+|---------|--------|
+| `lua54` | 5.4.8-6.1 |
+| `mesa` | 2:26.0.3-2 |
+| `vulkan-intel` | 2:26.0.3-2 |
+| `vulkan-mesa-implicit-layers` | 2:26.0.3-2 |
+| `vulkan-radeon` | 2:26.0.3-2 |
+
+### Removed
+
+| Package | Version |
+|---------|--------|
+| `libclc` | 22.1.1-1 |
+| `libomxil-bellagio` | 0.9.3-5.4 |
+| `mesa-git` | 26.1.0_devel.219852.59fc5ae7c1b-1 |
+
 ## 2026-03-23 10:52 UTC
 
 ### Updated
