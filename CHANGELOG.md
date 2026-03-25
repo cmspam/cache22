@@ -1,5 +1,17 @@
 # Cache22 Package Changelog
 
+## 2026-03-25 08:10 UTC
+
+### Updated
+
+| Package | From | To |
+|---------|------|----|
+| `linux-cachyos` | 6.19.9-1 | 6.19.9-2 |
+| `linux-cachyos-headers` | 6.19.9-1 | 6.19.9-2 |
+| `linux-cachyos-nvidia-open` | 6.19.9-1 | 6.19.9-2 |
+| `nvidia-utils` | 595.45.04-2 | 595.58.03-1 |
+| `protontricks` | 1.13.1-3 | 1.14.0-1 |
+
 ## 2026-03-24 08:14 UTC
 
 ### Updated

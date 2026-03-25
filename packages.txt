@@ -750,9 +750,9 @@ libzip 1.11.4-1.2
 licenses 20240728-1
 lilv 0.26.4-1
 linux-api-headers 1:6.19-1
-linux-cachyos 6.19.9-1
-linux-cachyos-headers 6.19.9-1
-linux-cachyos-nvidia-open 6.19.9-1
+linux-cachyos 6.19.9-2
+linux-cachyos-headers 6.19.9-2
+linux-cachyos-nvidia-open 6.19.9-2
 linux-firmware 1:20260309-1
 linux-firmware-amdgpu 1:20260309-1
 linux-firmware-atheros 1:20260309-1
@@ -825,7 +825,7 @@ nss 3.122-1.1
 ntfsprogs-plus 1.0.0-1
 numactl 2.0.19-1
 nvidia-settings 595.45.04-1
-nvidia-utils 595.45.04-2
+nvidia-utils 595.58.03-1
 ocean-sound-theme 6.6.3-1
 ocl-icd 2.3.4-1.1
 okular 25.12.3-1.1
@@ -917,7 +917,7 @@ procps-ng 4.0.6-1.1
 protobuf 33.1-4.1
 protobuf-c 1.5.2-8.1
 proton-cachyos-slr 1:10.0.20260320-2
-protontricks 1.13.1-3
+protontricks 1.14.0-1
 psmisc 23.7-1.1
 pulseaudio-qt 1.8.1-1.1
 purpose 6.24.0-2.1
