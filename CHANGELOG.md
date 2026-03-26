@@ -1,5 +1,19 @@
 # Cache22 Package Changelog
 
+## 2026-03-26 08:22 UTC
+
+### Updated
+
+| Package | From | To |
+|---------|------|----|
+| `freerdp` | 2:3.24.1-1.1 | 2:3.24.2-1.1 |
+| `libopenmpt` | 0.8.5-1.1 | 0.8.6-1.1 |
+| `linux-cachyos` | 6.19.9-2 | 6.19.10-1 |
+| `linux-cachyos-headers` | 6.19.9-2 | 6.19.10-1 |
+| `linux-cachyos-nvidia-open` | 6.19.9-2 | 6.19.10-1 |
+| `python-cbor2` | 5.8.0-2.1 | 5.9.0-1.1 |
+| `xfsprogs` | 6.18.0-1.1 | 6.19.0-1.1 |
+
 ## 2026-03-25 20:03 UTC
 
 ### Updated
