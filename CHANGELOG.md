@@ -1,5 +1,61 @@
 # Cache22 Package Changelog
 
+## 2026-03-26 20:12 UTC
+
+### Updated
+
+| Package | From | To |
+|---------|------|----|
+| `archlinux-appstream-data` | 20260107-1 | 20260326-1 |
+| `attica` | 6.24.0-1.1 | 6.24.0-2 |
+| `btop` | 1.4.6-1.1 | 1.4.6-2 |
+| `fcitx5-qt` | 5.1.13-2.1 | 5.1.13-3 |
+| `kcoreaddons` | 6.24.0-2.1 | 6.24.0-3 |
+| `kguiaddons` | 6.24.0-1.1 | 6.24.0-3 |
+| `kidletime` | 6.24.0-1.1 | 6.24.0-2 |
+| `kjobwidgets` | 6.24.0-2.1 | 6.24.0-3 |
+| `knotifications` | 6.24.0-2.1 | 6.24.0-3 |
+| `kstatusnotifieritem` | 6.24.0-1.1 | 6.24.0-2 |
+| `kunitconversion` | 6.24.0-2.1 | 6.24.0-3 |
+| `kwidgetsaddons` | 6.24.0-2.1 | 6.24.0-3 |
+| `kwin` | 6.6.3-1.1 | 6.6.3-4 |
+| `kwindowsystem` | 6.24.0-1.1 | 6.24.0-2 |
+| `kxmlgui` | 6.24.0-2.1 | 6.24.0-3 |
+| `layer-shell-qt` | 6.6.3-1.1 | 6.6.3-3 |
+| `lib32-libpng` | 1.6.55-1 | 1.6.56-1 |
+| `libfyaml` | 0.9.6-1.1 | 0.9.6-2 |
+| `libkscreen` | 6.6.3-1.1 | 6.6.3-2 |
+| `libpng` | 1.6.55-1.1 | 1.6.56-1.1 |
+| `marisa` | 0.2.7-1.1 | 0.2.7-2 |
+| `plasma-integration` | 6.6.3-1.1 | 6.6.3-3 |
+| `python-sentry_sdk` | 2.55.0-1 | 2.56.0-1 |
+| `qt6-5compat` | 6.10.2-1.1 | 6.11.0-1 |
+| `qt6-base` | 6.10.2-1.1 | 6.11.0-1 |
+| `qt6-declarative` | 6.10.2-1.1 | 6.11.0-1 |
+| `qt6-imageformats` | 6.10.2-1.1 | 6.11.0-1 |
+| `qt6-location` | 6.10.2-1.1 | 6.11.0-1 |
+| `qt6-multimedia` | 6.10.2-1.1 | 6.11.0-1 |
+| `qt6-multimedia-ffmpeg` | 6.10.2-1.1 | 6.11.0-1 |
+| `qt6-positioning` | 6.10.2-1.1 | 6.11.0-1 |
+| `qt6-quick3d` | 6.10.2-1.1 | 6.11.0-1 |
+| `qt6-quicktimeline` | 6.10.2-1.1 | 6.11.0-1 |
+| `qt6-shadertools` | 6.10.2-1.1 | 6.11.0-1 |
+| `qt6-speech` | 6.10.2-1.1 | 6.11.0-1 |
+| `qt6-svg` | 6.10.2-1.1 | 6.11.0-1 |
+| `qt6-tools` | 6.10.2-3.1 | 6.11.0-1 |
+| `qt6-translations` | 6.10.2-1 | 6.11.0-1 |
+| `qt6-virtualkeyboard` | 6.10.2-1.1 | 6.11.0-1 |
+| `qt6-webchannel` | 6.10.2-1.1 | 6.11.0-1 |
+| `qt6-webengine` | 6.10.2-2 | 6.11.0-2 |
+| `qt6-websockets` | 6.10.2-1.1 | 6.11.0-1 |
+| `qt6-webview` | 6.10.2-1.1 | 6.11.0-1 |
+
+### Added
+
+| Package | Version |
+|---------|--------|
+| `openh264` | 2.6.0-2.1 |
+
 ## 2026-03-26 08:22 UTC
 
 ### Updated
