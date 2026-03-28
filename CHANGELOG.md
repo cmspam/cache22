@@ -1,5 +1,29 @@
 # Cache22 Package Changelog
 
+## 2026-03-28 08:02 UTC
+
+### Updated
+
+| Package | From | To |
+|---------|------|----|
+| `compiler-rt` | 22.1.1-1.1 | 22.1.2-1.1 |
+| `libmpc` | 1.3.1-2.1 | 1.4.0-1.1 |
+| `lld` | 22.1.1-1.1 | 22.1.2-1.1 |
+
+### Added
+
+| Package | Version |
+|---------|--------|
+| `heroic-games-launcher-bin` | 2.20.1-1 |
+
+### Removed
+
+| Package | Version |
+|---------|--------|
+| `c-ares` | 1.34.6-1.1 |
+| `electron39` | 39.5.2-1 |
+| `heroic-games-launcher` | 2.20.1-1 |
+
 ## 2026-03-27 19:57 UTC
 
 ### Updated
