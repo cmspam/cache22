@@ -1,5 +1,20 @@
 # Cache22 Package Changelog
 
+## 2026-03-29 08:13 UTC
+
+### Updated
+
+| Package | From | To |
+|---------|------|----|
+| `incus` | 6.22.0-1.1 | 6.23.0-1.1 |
+| `incus-tools` | 6.22.0-1.1 | 6.23.0-1.1 |
+| `lib32-gst-plugins-base-libs` | 1.28.1-2 | 1.28.1-3 |
+| `lib32-gstreamer` | 1.28.1-2 | 1.28.1-3 |
+| `lib32-llvm-libs` | 1:22.1.1-1 | 1:22.1.2-1 |
+| `libwireplumber` | 0.5.13-2.2 | 0.5.14-1.1 |
+| `libxdp` | 1.6.2-1.1 | 1.6.3-1.1 |
+| `wireplumber` | 0.5.13-2.2 | 0.5.14-1.1 |
+
 ## 2026-03-28 19:46 UTC
 
 ### Updated

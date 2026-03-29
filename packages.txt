@@ -252,8 +252,8 @@ icu 78.3-1.1
 iio-sensor-proxy 3.9-1.1
 ijs 0.35-6.1
 imath 3.2.2-4.1
-incus 6.22.0-1.1
-incus-tools 6.22.0-1.1
+incus 6.23.0-1.1
+incus-tools 6.23.0-1.1
 incus-ui 0.19.9-1.1
 inetutils 2.7-2.1
 iniparser 4.2.6-2.1
@@ -394,8 +394,8 @@ lib32-glibc 2.43+r5+g856c426a7534-3
 lib32-glu 9.0.3-2
 lib32-gmp 6.3.0-2
 lib32-gnutls 3.8.12-1
-lib32-gst-plugins-base-libs 1.28.1-2
-lib32-gstreamer 1.28.1-2
+lib32-gst-plugins-base-libs 1.28.1-3
+lib32-gstreamer 1.28.1-3
 lib32-gtk3 1:3.24.52-1
 lib32-harfbuzz 13.2.1-1
 lib32-icu 78.3-1
@@ -465,7 +465,7 @@ lib32-libxt 1.3.1-1
 lib32-libxtst 1.2.5-2
 lib32-libxv 1.0.12-2
 lib32-libxxf86vm 1.1.5-2
-lib32-llvm-libs 1:22.1.1-1
+lib32-llvm-libs 1:22.1.2-1
 lib32-lm_sensors 1:3.6.2-2
 lib32-mangohud 0.8.2-1
 lib32-mesa 2:26.0.3-2
@@ -705,7 +705,7 @@ libvpx 1.16.0-2.1
 libwacom 2.18.0-2
 libwbclient 2:4.24.0-1.1
 libwebp 1.6.0-2.1
-libwireplumber 0.5.13-2.2
+libwireplumber 0.5.14-1.1
 libx11 1.8.13-1.1
 libxau 1.0.12-1.1
 libxaw 1.0.16-1.1
@@ -717,7 +717,7 @@ libxcursor 1.2.3-1.1
 libxcvt 0.1.3-1.1
 libxdamage 1.1.7-1.1
 libxdmcp 1.1.5-1.2
-libxdp 1.6.2-1.1
+libxdp 1.6.3-1.1
 libxext 1.3.7-1.1
 libxfixes 6.0.2-1.1
 libxfont2 2.0.7-1.1
@@ -1178,7 +1178,7 @@ wine 11.5-1.1
 wine-cachyos-opt 2:10.0.20260312-2
 winetricks 20260125-1.1
 wireguard-tools 1.0.20260223-1.1
-wireplumber 0.5.13-2.2
+wireplumber 0.5.14-1.1
 woff2 1.0.2-6.1
 wolfssl 5.9.0-1
 wpa_supplicant 2:2.11-5.1
