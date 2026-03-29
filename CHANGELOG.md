@@ -1,5 +1,49 @@
 # Cache22 Package Changelog
 
+## 2026-03-29 19:48 UTC
+
+### Updated
+
+| Package | From | To |
+|---------|------|----|
+| `abseil-cpp` | 20250814.1-1.1 | 20260107.1-1.1 |
+| `libvlc` | 3.0.22-1.1 | 3.0.22-2.1 |
+| `opencv` | 4.13.0-3.1 | 4.13.0-4.1 |
+| `protobuf` | 33.1-4.1 | 34.1-1.1 |
+| `protobuf-c` | 1.5.2-8.1 | 1.5.2-9.1 |
+| `proton-cachyos-slr` | 1:10.0.20260320-2 | 1:10.0.20260324-1 |
+| `python-numpy` | 2.4.3-1.1 | 2.4.4-1.1 |
+| `python-protobuf` | 33.1-4.1 | 34.1-1.1 |
+| `re2` | 2:2025.11.05-1.1 | 2:2025.11.05-2.1 |
+| `steam` | 1.0.0.85-5 | 1.0.0.85-6 |
+| `steam-devices` | 1.0.0.85-5 | 1.0.0.85-6 |
+| `vlc-plugin-a52dec` | 3.0.22-1.1 | 3.0.22-2.1 |
+| `vlc-plugin-alsa` | 3.0.22-1.1 | 3.0.22-2.1 |
+| `vlc-plugin-archive` | 3.0.22-1.1 | 3.0.22-2.1 |
+| `vlc-plugin-dav1d` | 3.0.22-1.1 | 3.0.22-2.1 |
+| `vlc-plugin-dbus` | 3.0.22-1.1 | 3.0.22-2.1 |
+| `vlc-plugin-dbus-screensaver` | 3.0.22-1.1 | 3.0.22-2.1 |
+| `vlc-plugin-faad2` | 3.0.22-1.1 | 3.0.22-2.1 |
+| `vlc-plugin-flac` | 3.0.22-1.1 | 3.0.22-2.1 |
+| `vlc-plugin-gnutls` | 3.0.22-1.1 | 3.0.22-2.1 |
+| `vlc-plugin-inflate` | 3.0.22-1.1 | 3.0.22-2.1 |
+| `vlc-plugin-journal` | 3.0.22-1.1 | 3.0.22-2.1 |
+| `vlc-plugin-jpeg` | 3.0.22-1.1 | 3.0.22-2.1 |
+| `vlc-plugin-mpg123` | 3.0.22-1.1 | 3.0.22-2.1 |
+| `vlc-plugin-ogg` | 3.0.22-1.1 | 3.0.22-2.1 |
+| `vlc-plugin-opus` | 3.0.22-1.1 | 3.0.22-2.1 |
+| `vlc-plugin-png` | 3.0.22-1.1 | 3.0.22-2.1 |
+| `vlc-plugin-shout` | 3.0.22-1.1 | 3.0.22-2.1 |
+| `vlc-plugin-speex` | 3.0.22-1.1 | 3.0.22-2.1 |
+| `vlc-plugin-tag` | 3.0.22-1.1 | 3.0.22-2.1 |
+| `vlc-plugin-theora` | 3.0.22-1.1 | 3.0.22-2.1 |
+| `vlc-plugin-twolame` | 3.0.22-1.1 | 3.0.22-2.1 |
+| `vlc-plugin-vorbis` | 3.0.22-1.1 | 3.0.22-2.1 |
+| `vlc-plugin-vpx` | 3.0.22-1.1 | 3.0.22-2.1 |
+| `vlc-plugin-xml` | 3.0.22-1.1 | 3.0.22-2.1 |
+| `vlc-plugins-base` | 3.0.22-1.1 | 3.0.22-2.1 |
+| `xorg-setxkbmap` | 1.3.4-2.1 | 1.3.5-1.1 |
+
 ## 2026-03-29 08:13 UTC
 
 ### Updated
