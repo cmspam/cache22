@@ -1,5 +1,69 @@
 # Cache22 Package Changelog
 
+## 2026-03-31 08:26 UTC
+
+### Updated
+
+| Package | From | To |
+|---------|------|----|
+| `file` | 5.47-1.1 | 5.47-2.1 |
+| `gdb` | 17.1-2.1 | 17.1-3.1 |
+| `gdb-common` | 17.1-2.1 | 17.1-3.1 |
+| `jasper` | 4.2.8-1.1 | 4.2.9-1.1 |
+| `lib32-libngtcp2` | 1.21.0-1 | 1.22.0-1 |
+| `libngtcp2` | 1.21.0-1.1 | 1.22.0-1.1 |
+| `libvpx` | 1.16.0-2.1 | 1.16.0-3.1 |
+| `luajit` | 2.1.1774638290+fbb36bb-1.1 | 2.1.1774896198+18b087c-1.1 |
+| `ndctl` | 82-1.1 | 83-1.1 |
+| `python-requests` | 2.32.5-4 | 2.33.1-1 |
+| `qemu-audio-alsa` | 10.2.2-1 | 10.2.2-2 |
+| `qemu-audio-dbus` | 10.2.2-1 | 10.2.2-2 |
+| `qemu-audio-jack` | 10.2.2-1 | 10.2.2-2 |
+| `qemu-audio-oss` | 10.2.2-1 | 10.2.2-2 |
+| `qemu-audio-pa` | 10.2.2-1 | 10.2.2-2 |
+| `qemu-audio-pipewire` | 10.2.2-1 | 10.2.2-2 |
+| `qemu-audio-sdl` | 10.2.2-1 | 10.2.2-2 |
+| `qemu-audio-spice` | 10.2.2-1 | 10.2.2-2 |
+| `qemu-base` | 10.2.2-1 | 10.2.2-2 |
+| `qemu-block-curl` | 10.2.2-1 | 10.2.2-2 |
+| `qemu-block-dmg` | 10.2.2-1 | 10.2.2-2 |
+| `qemu-block-nfs` | 10.2.2-1 | 10.2.2-2 |
+| `qemu-block-ssh` | 10.2.2-1 | 10.2.2-2 |
+| `qemu-chardev-spice` | 10.2.2-1 | 10.2.2-2 |
+| `qemu-common` | 10.2.2-1 | 10.2.2-2 |
+| `qemu-desktop` | 10.2.2-1 | 10.2.2-2 |
+| `qemu-hw-display-qxl` | 10.2.2-1 | 10.2.2-2 |
+| `qemu-hw-display-virtio-gpu` | 10.2.2-1 | 10.2.2-2 |
+| `qemu-hw-display-virtio-gpu-gl` | 10.2.2-1 | 10.2.2-2 |
+| `qemu-hw-display-virtio-gpu-pci` | 10.2.2-1 | 10.2.2-2 |
+| `qemu-hw-display-virtio-gpu-pci-gl` | 10.2.2-1 | 10.2.2-2 |
+| `qemu-hw-display-virtio-gpu-pci-rutabaga` | 10.2.2-1 | 10.2.2-2 |
+| `qemu-hw-display-virtio-gpu-rutabaga` | 10.2.2-1 | 10.2.2-2 |
+| `qemu-hw-display-virtio-vga` | 10.2.2-1 | 10.2.2-2 |
+| `qemu-hw-display-virtio-vga-gl` | 10.2.2-1 | 10.2.2-2 |
+| `qemu-hw-display-virtio-vga-rutabaga` | 10.2.2-1 | 10.2.2-2 |
+| `qemu-hw-uefi-vars` | 10.2.2-1 | 10.2.2-2 |
+| `qemu-hw-usb-host` | 10.2.2-1 | 10.2.2-2 |
+| `qemu-hw-usb-redirect` | 10.2.2-1 | 10.2.2-2 |
+| `qemu-hw-usb-smartcard` | 10.2.2-1 | 10.2.2-2 |
+| `qemu-img` | 10.2.2-1 | 10.2.2-2 |
+| `qemu-system-x86` | 10.2.2-1 | 10.2.2-2 |
+| `qemu-system-x86-firmware` | 10.2.2-1 | 10.2.2-2 |
+| `qemu-ui-curses` | 10.2.2-1 | 10.2.2-2 |
+| `qemu-ui-dbus` | 10.2.2-1 | 10.2.2-2 |
+| `qemu-ui-egl-headless` | 10.2.2-1 | 10.2.2-2 |
+| `qemu-ui-gtk` | 10.2.2-1 | 10.2.2-2 |
+| `qemu-ui-opengl` | 10.2.2-1 | 10.2.2-2 |
+| `qemu-ui-sdl` | 10.2.2-1 | 10.2.2-2 |
+| `qemu-ui-spice-app` | 10.2.2-1 | 10.2.2-2 |
+| `qemu-ui-spice-core` | 10.2.2-1 | 10.2.2-2 |
+| `qemu-vhost-user-gpu` | 10.2.2-1 | 10.2.2-2 |
+| `re2` | 2:2025.11.05-2.1 | 2:2025.11.05-3.1 |
+| `rubberband` | 4.0.0-1.1 | 4.0.0-2.1 |
+| `svt-av1` | 4.0.1-2 | 4.1.0-2 |
+| `vim` | 9.2.0204-2.2 | 9.2.0272-1.1 |
+| `vim-runtime` | 9.2.0204-2.2 | 9.2.0272-1.1 |
+
 ## 2026-03-29 19:48 UTC
 
 ### Updated
