@@ -380,7 +380,9 @@ def add_layer_from_files(
         tmp_tar.unlink(missing_ok=True)
         return None
 
+    t0 = time.monotonic()
     diff_id = "sha256:" + sha256_file(tmp_tar)
+    raw_size = tmp_tar.stat().st_size
 
     # zstd compression. The zstd CLI is deterministic regardless of
     # thread count (a design goal — Arch's pacman relies on it), so
@@ -399,10 +401,27 @@ def add_layer_from_files(
 
     # Move to content-addressed name
     final = out_blobs / digest.removeprefix("sha256:")
+    dedup = ""
     if not final.exists():
         zst_tmp.rename(final)
     else:
         zst_tmp.unlink()  # already there from a prior package with same content
+        dedup = "  [dedup]"
+
+    elapsed = time.monotonic() - t0
+    raw_mib = raw_size / 1024 / 1024
+    zst_mib = size / 1024 / 1024
+    ratio = (size / raw_size * 100) if raw_size else 0.0
+    # One line per layer so the GH Actions log shows live progress
+    # through what is otherwise a multi-minute silent block. flush=True
+    # because GH's log streaming buffers per chunk; without flush the
+    # output appears all at once at the end of the step.
+    print(
+        f"    [{layer_name:32s}] {actually_added:5d} entries  "
+        f"raw={raw_mib:7.2f} MiB  zst={zst_mib:7.2f} MiB ({ratio:4.1f}%)  "
+        f"compress={elapsed:5.1f}s{dedup}",
+        flush=True,
+    )
 
     return {
         "mediaType": "application/vnd.oci.image.layer.v1.tar+zstd",
@@ -424,6 +443,13 @@ def write_blob(out_blobs: Path, content: bytes, media_type: str) -> dict:
 
 
 def main():
+    # GH Actions buffers a step's stdout in chunks; line-buffering makes
+    # every print() flush on newline so the build log shows progress
+    # live during the multi-minute layer-build phase instead of dumping
+    # everything when the script exits.
+    sys.stdout.reconfigure(line_buffering=True)
+    sys.stderr.reconfigure(line_buffering=True)
+    t_start = time.monotonic()
     ap = argparse.ArgumentParser()
     ap.add_argument("--src", required=True, help="source image ref (e.g. localhost/foo:raw)")
     ap.add_argument("--dst", required=True, help="output skopeo dir path")
@@ -669,7 +695,8 @@ def main():
         # pacman-db, leftover-promoted groups (alphabetical), leftover.
         layers_desc: list[dict] = []
 
-        print("==> Building file-path-group layers")
+        phase_t = time.monotonic()
+        print(f"==> Building file-path-group layers ({len(file_group_paths)} groups)")
         for gname in sorted(file_group_paths.keys()):
             files = sorted(set(file_group_paths[gname]))
             file_paths = [src_mnt / f for f in files]
@@ -679,10 +706,11 @@ def main():
             )
             if desc:
                 layers_desc.append(desc)
-        print(f"    {len(layers_desc)} file-path-group layers built")
+        print(f"    {len(layers_desc)} file-path-group layers built in {time.monotonic()-phase_t:.1f}s")
 
         before_groups = len(layers_desc)
-        print("==> Building package-group layers")
+        phase_t = time.monotonic()
+        print(f"==> Building package-group layers ({len(group_assignment)} groups)")
         for gname in sorted(group_assignment.keys()):
             pkgs_in = sorted(group_assignment[gname])
             file_paths: list[Path] = []
@@ -697,9 +725,10 @@ def main():
             )
             if desc:
                 layers_desc.append(desc)
-        print(f"    {len(layers_desc) - before_groups} package-group layers built")
+        print(f"    {len(layers_desc) - before_groups} package-group layers built in {time.monotonic()-phase_t:.1f}s")
 
-        print("==> Building solo layers")
+        phase_t = time.monotonic()
+        print(f"==> Building solo layers ({len(solo_pkgs)} packages)")
         before_solo = len(layers_desc)
         for i, pkg in enumerate(sorted(solo_pkgs), 1):
             files = pkg_files[pkg]
@@ -710,9 +739,11 @@ def main():
             )
             if desc:
                 layers_desc.append(desc)
-        print(f"    {len(layers_desc) - before_solo} solo layers built")
+        print(f"    {len(layers_desc) - before_solo} solo layers built in {time.monotonic()-phase_t:.1f}s")
 
-        print("==> Building bucket layers")
+        phase_t = time.monotonic()
+        nonempty_buckets = sum(1 for b in range(N_BUCKETS) if bucket_assignment[b])
+        print(f"==> Building bucket layers ({nonempty_buckets} non-empty of {N_BUCKETS})")
         before_buckets = len(layers_desc)
         for bidx in range(N_BUCKETS):
             pkgs_in = sorted(bucket_assignment[bidx])
@@ -730,8 +761,9 @@ def main():
             )
             if desc:
                 layers_desc.append(desc)
-        print(f"    {len(layers_desc) - before_buckets} bucket layers built")
+        print(f"    {len(layers_desc) - before_buckets} bucket layers built in {time.monotonic()-phase_t:.1f}s")
 
+        phase_t = time.monotonic()
         print("==> Building pacman-db layer")
         # Normalize wall-clock timestamps in pacman's local DB to SDE.
         #   desc:  %INSTALLDATE% (set by pacman at install) +
@@ -828,7 +860,10 @@ def main():
         if desc:
             layers_desc.append(desc)
 
-        print("==> Building leftover-promotion layers")
+        print(f"    pacman-db phase done in {time.monotonic()-phase_t:.1f}s")
+
+        phase_t = time.monotonic()
+        print(f"==> Building leftover-promotion layers ({len(promoted_files)} groups)")
         before_promo = len(layers_desc)
         for gname in sorted(promoted_files.keys()):
             files = promoted_files[gname]
@@ -839,9 +874,10 @@ def main():
             )
             if desc:
                 layers_desc.append(desc)
-        print(f"    {len(layers_desc) - before_promo} leftover-promotion layers built")
+        print(f"    {len(layers_desc) - before_promo} leftover-promotion layers built in {time.monotonic()-phase_t:.1f}s")
 
-        print("==> Building leftover layer")
+        phase_t = time.monotonic()
+        print(f"==> Building leftover layer ({len(leftover_files)} files)")
         leftover_paths = [src_mnt / f for f in leftover_files]
         leftover_arcname = {src_mnt / f: f for f in leftover_files}
         # Empty mount-point dirs that must exist at runtime. The file walk
@@ -887,6 +923,7 @@ def main():
         )
         if desc:
             layers_desc.append(desc)
+        print(f"    leftover phase done in {time.monotonic()-phase_t:.1f}s")
 
         print(f"==> {len(layers_desc)} layers built")
 
@@ -981,6 +1018,7 @@ def main():
 
         # Print summary
         total = sum(d["size"] for d in layers_desc)
+        elapsed_total = time.monotonic() - t_start
         print()
         print(f"=== Rechunked image written to {out_root} ===")
         print(f"    layers: {len(layers_desc)}")
@@ -991,6 +1029,7 @@ def main():
             print(f"{sizes[len(sizes) // 2]:,} bytes")
         print(f"    largest layer: {max(d['size'] for d in layers_desc):,} bytes")
         print(f"    smallest layer: {min(d['size'] for d in layers_desc):,} bytes")
+        print(f"    total wall time: {elapsed_total:.1f}s ({elapsed_total/60:.1f} min)")
         print()
         print("Push with:")
         print(f"  sudo skopeo copy oci:{out_root}:rechunked docker://ghcr.io/<owner>/<repo>:<tag>")
