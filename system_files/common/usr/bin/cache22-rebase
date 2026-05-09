@@ -138,6 +138,13 @@ fi
 
 . /usr/lib/cache22/bootc-finalize.sh
 
+echo "==> Building + signing UKI for the new staged deploy"
+if ! systemctl start cache22-resign-uki.service; then
+    echo "ERROR: cache22-resign-uki failed — staged deploy will boot the prior UKI" >&2
+    echo "       Inspect: journalctl -u cache22-resign-uki.service" >&2
+    exit 1
+fi
+
 if (( REBOOT )); then
     echo "==> Rebooting"
     systemctl reboot

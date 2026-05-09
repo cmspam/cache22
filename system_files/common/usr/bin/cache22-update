@@ -75,6 +75,13 @@ fi
 
 . /usr/lib/cache22/bootc-finalize.sh
 
+echo "==> Building + signing UKI for the staged deploy"
+if ! systemctl start cache22-resign-uki.service; then
+    echo "ERROR: cache22-resign-uki failed — staged deploy will boot the prior UKI" >&2
+    echo "       Inspect: journalctl -u cache22-resign-uki.service" >&2
+    exit 1
+fi
+
 # Drop a /run/motd.d marker so the next SSH login banner mentions the
 # pending reboot. /run is tmpfs so it clears automatically on reboot.
 install -dm755 /run/motd.d

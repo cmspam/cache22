@@ -3,7 +3,7 @@ _cache22_secureboot() {
     local cur prev words cword
     _init_completion || return
 
-    local subs="status enroll unenroll --help"
+    local subs="status enable disable rotate-keys --help"
 
     if [[ $cword -eq 1 ]]; then
         COMPREPLY=( $(compgen -W "$subs" -- "$cur") )

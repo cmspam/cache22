@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 # cache22-karg — manage persistent kernel command-line args.
-# Writes /etc/bootc/kargs.d/50-cache22-user.toml and runs
-# `bootc upgrade --apply` so a fresh BLS entry gets written.
-#
-# For one-shot edits at boot, hit `e` in the grub menu instead.
+# Edits /etc/cache22/extra-cmdline and triggers cache22-resign-uki to
+# rebuild the per-deploy UKI with the new cmdline. The .path watcher
+# on extra-cmdline also catches manual edits.
 #
 # Subcommands:
 #   list                  show effective cmdline + user/image kargs
@@ -14,13 +13,38 @@
 
 set -euo pipefail
 
-USER_KARGS_DIR=/etc/bootc/kargs.d
-USER_KARGS_FILE="$USER_KARGS_DIR/50-cache22-user.toml"
+CMDLINE_FILE=/etc/cache22/extra-cmdline
 
 require_root() {
-    if [[ ${EUID} -ne 0 ]]; then
-        echo "Error: must run as root (try: sudo cache22-karg $*)" >&2
-        exit 1
+    [[ ${EUID} -eq 0 ]] || { echo "Error: must run as root (try: sudo cache22-karg $*)" >&2; exit 1; }
+}
+
+read_user_kargs() {
+    [[ -f "$CMDLINE_FILE" ]] || return 0
+    sed -e 's/[[:space:]]*#.*$//' -e '/^[[:space:]]*$/d' "$CMDLINE_FILE"
+}
+
+write_user_kargs() {
+    local kargs=("$@")
+    install -d -m0755 "$(dirname "$CMDLINE_FILE")"
+    {
+        echo "# User-managed kernel cmdline kargs. Edited by cache22-karg."
+        echo "# Newline-separated. '#' comments and blank lines ignored."
+        echo "# A change here triggers cache22-resign-uki via .path watcher."
+        local k
+        for k in "${kargs[@]}"; do
+            [[ -z "$k" ]] && continue
+            echo "$k"
+        done
+    } > "$CMDLINE_FILE"
+}
+
+apply() {
+    if systemctl --quiet is-active cache22-resign-uki.service; then
+        echo "==> cache22-resign-uki already running; will re-fire on .path change"
+    else
+        echo "==> Triggering cache22-resign-uki.service"
+        systemctl start cache22-resign-uki.service
     fi
 }
 
@@ -28,14 +52,14 @@ cmd_list() {
     echo "─── Booted cmdline ───"
     cat /proc/cmdline
     echo
-    echo "─── User-managed args ($USER_KARGS_FILE) ───"
-    if [[ -f "$USER_KARGS_FILE" ]]; then
-        cat "$USER_KARGS_FILE"
+    echo "─── User-managed kargs ($CMDLINE_FILE) ───"
+    if [[ -s "$CMDLINE_FILE" ]] && read_user_kargs | grep -q .; then
+        read_user_kargs
     else
         echo "(none)"
     fi
     echo
-    echo "─── Image defaults (/usr/lib/bootc/kargs.d/) ───"
+    echo "─── Image defaults (/usr/lib/bootc/kargs.d/*.toml) ───"
     if compgen -G "/usr/lib/bootc/kargs.d/*.toml" >/dev/null; then
         cat /usr/lib/bootc/kargs.d/*.toml
     else
@@ -43,165 +67,73 @@ cmd_list() {
     fi
 }
 
-read_user_kargs() {
-    [[ -f "$USER_KARGS_FILE" ]] || return 0
-    # Parse a TOML multi-line `kargs = [...]` block, one quoted entry per output line.
-    awk '
-        /^kargs *= *\[/  { in_arr=1; sub(/^kargs *= *\[/,""); }
-        in_arr {
-            if (sub(/\].*$/, "")) in_arr=0
-            while (match($0, /"[^"]*"/)) {
-                tok = substr($0, RSTART+1, RLENGTH-2)
-                if (tok != "") print tok
-                $0 = substr($0, RSTART+RLENGTH)
-            }
-            if (!in_arr) exit
-        }
-    ' "$USER_KARGS_FILE"
-}
-
-apply_kargs() {
-    if command -v bootc >/dev/null 2>&1; then
-        echo "==> Applying via 'bootc upgrade --apply' (writes a fresh BLS entry)"
-        bootc upgrade --apply 2>&1 || {
-            echo "WARN: bootc upgrade --apply failed; the kargs file is in place but" >&2
-            echo "      no new BLS entry was written. Try 'sudo bootc upgrade --apply'" >&2
-            echo "      manually, or reboot and run it." >&2
-        }
-    else
-        echo "WARN: bootc not in PATH — kargs file written but you'll need to" >&2
-        echo "      regenerate the BLS entry manually." >&2
-    fi
-
-    # TPM-bound LUKS unlock (cache22-encryption enroll) seals against
-    # PCR 8 = grub's measurement of the kernel command line. Any cmdline
-    # change invalidates that seal — next boot will prompt for the LUKS
-    # passphrase instead of auto-unlocking. This is the intended
-    # behavior (it's what catches an attacker editing the BLS entry to
-    # add init=/bin/sh), but it surprises users who weren't warned.
-    if systemd-cryptenroll --tpm2-device=list 2>/dev/null | grep -q . \
-       && grep -q tpm2-device /proc/cmdline 2>/dev/null; then
-        cat <<EOF
-
-NOTE: TPM2 auto-unlock is enabled on this system. Changing the kernel
-cmdline invalidates the TPM2 seal (PCR 8 mismatch). On next boot you
-will be prompted for the LUKS passphrase instead of unlocking
-automatically. After successful boot, run:
-
-    sudo cache22-encryption enroll <device>
-
-to re-seal the TPM2 keyslot against the new cmdline.
-EOF
-    fi
-}
-
 cmd_add() {
     require_root add "$@"
     [[ $# -ge 1 ]] || { echo "Usage: cache22-karg add KEY=VALUE [KEY=VALUE...]" >&2; exit 1; }
 
-    local existing
-    existing=$(read_user_kargs)
-    local new=()
+    local existing=()
     while IFS= read -r line; do
-        [[ -z "$line" ]] || new+=("$line")
-    done <<< "$existing"
+        [[ -n "$line" ]] && existing+=("$line")
+    done < <(read_user_kargs)
 
     local arg key
     for arg in "$@"; do
         key="${arg%%=*}"
         local kept=()
-        for k in "${new[@]:-}"; do
+        for k in "${existing[@]:-}"; do
             [[ "${k%%=*}" != "$key" ]] && kept+=("$k")
         done
         kept+=("$arg")
-        new=("${kept[@]}")
+        existing=("${kept[@]}")
     done
 
-    install -d -m0755 "$USER_KARGS_DIR"
-    {
-        echo "# Managed by cache22-karg."
-        echo "kargs = ["
-        local first=1
-        for k in "${new[@]}"; do
-            [[ -z "$k" ]] && continue
-            if [[ $first -eq 1 ]]; then
-                printf '    "%s"' "$k"
-                first=0
-            else
-                printf ',\n    "%s"' "$k"
-            fi
-        done
-        echo
-        echo "]"
-        echo 'match-architectures = ["x86_64"]'
-    } > "$USER_KARGS_FILE"
-
-    echo "==> Wrote $USER_KARGS_FILE"
-    cat "$USER_KARGS_FILE"
-    apply_kargs
+    write_user_kargs "${existing[@]}"
+    echo "==> Wrote $CMDLINE_FILE"
+    cat "$CMDLINE_FILE"
+    apply
 }
 
 cmd_remove() {
     require_root remove "$@"
     [[ $# -ge 1 ]] || { echo "Usage: cache22-karg remove KEY [KEY...]" >&2; exit 1; }
-    [[ -f "$USER_KARGS_FILE" ]] || { echo "Nothing to remove (no $USER_KARGS_FILE)."; exit 0; }
+    [[ -f "$CMDLINE_FILE" ]] || { echo "Nothing to remove (no $CMDLINE_FILE)."; exit 0; }
 
-    local existing
-    existing=$(read_user_kargs)
-    local kept=()
+    local existing=()
     while IFS= read -r line; do
-        [[ -z "$line" ]] && continue
-        local lkey="${line%%=*}"
-        local skip=0
-        for k in "$@"; do
-            [[ "$lkey" == "$k" ]] && { skip=1; break; }
-        done
-        [[ $skip -eq 0 ]] && kept+=("$line")
-    done <<< "$existing"
+        [[ -n "$line" ]] && existing+=("$line")
+    done < <(read_user_kargs)
 
-    if [[ ${#kept[@]} -eq 0 ]]; then
-        rm -f "$USER_KARGS_FILE"
-        echo "==> Removed $USER_KARGS_FILE (no remaining user kargs)"
-    else
-        {
-            echo "# Managed by cache22-karg."
-            echo "kargs = ["
-            local first=1
-            for k in "${kept[@]}"; do
-                if [[ $first -eq 1 ]]; then
-                    printf '    "%s"' "$k"
-                    first=0
-                else
-                    printf ',\n    "%s"' "$k"
-                fi
-            done
-            echo
-            echo "]"
-            echo 'match-architectures = ["x86_64"]'
-        } > "$USER_KARGS_FILE"
-        echo "==> Updated $USER_KARGS_FILE"
-        cat "$USER_KARGS_FILE"
-    fi
-    apply_kargs
+    local kept=()
+    local k
+    for k in "${existing[@]:-}"; do
+        local lkey="${k%%=*}"
+        local skip=0
+        for arg in "$@"; do
+            [[ "$lkey" == "$arg" ]] && { skip=1; break; }
+        done
+        [[ $skip -eq 0 ]] && kept+=("$k")
+    done
+
+    write_user_kargs "${kept[@]}"
+    echo "==> Updated $CMDLINE_FILE"
+    cat "$CMDLINE_FILE"
+    apply
 }
 
 cmd_reset() {
     require_root reset
-    rm -f "$USER_KARGS_FILE"
-    echo "==> Removed $USER_KARGS_FILE"
-    apply_kargs
+    write_user_kargs
+    echo "==> Cleared $CMDLINE_FILE"
+    apply
 }
 
 case "${1:-list}" in
-    list)    cmd_list ;;
-    add)     shift; cmd_add "$@" ;;
-    remove|rm) shift; cmd_remove "$@" ;;
-    reset)   cmd_reset ;;
-    -h|--help)
-        sed -n '2,13p' "$0" | sed 's/^# \?//'
-        ;;
+    list)        cmd_list ;;
+    add)         shift; cmd_add "$@" ;;
+    remove|rm)   shift; cmd_remove "$@" ;;
+    reset)       cmd_reset ;;
+    -h|--help)   sed -n '2,13p' "$0" | sed 's/^# \?//' ;;
     *)
         echo "Usage: cache22-karg [list|add KEY=VAL...|remove KEY...|reset|--help]" >&2
-        exit 1
-        ;;
+        exit 1 ;;
 esac

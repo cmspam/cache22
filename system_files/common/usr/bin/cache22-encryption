@@ -1,20 +1,22 @@
 #!/usr/bin/env bash
-# cache22-encryption — manage TPM2 auto-unlock for LUKS volumes.
-#
-# The installer puts `tpm2-device=auto` in rd.luks.options by default,
-# so this script just enrolls (or wipes) the TPM2 keyslot.
+# cache22-encryption — manage TPM2 auto-unlock for LUKS volumes via
+# signed PCR 11 policy. Bound to the per-machine TPM signing key, so
+# every UKI rebuild (after `bootc upgrade`, karg change, etc.) is
+# accepted automatically without re-enrollment.
 #
 # Subcommands:
-#   list                 show encrypted volumes and TPM2 status
+#   list                 show encrypted volumes + TPM status
 #   enroll <device>      enroll TPM2 unlock; reboot to use it
 #   remove <device>      wipe the TPM2 keyslot
+#   --help
 
 set -euo pipefail
+
+TPM_PUB=/var/lib/cache22/sbkey/tpm-pcr11.pub
 
 require_root() {
     [[ ${EUID} -eq 0 ]] || { echo "Error: must run as root (try: sudo cache22-encryption $*)" >&2; exit 1; }
 }
-
 die() { echo "Error: $*" >&2; exit 1; }
 
 cmd_list() {
@@ -23,14 +25,20 @@ cmd_list() {
     echo
     echo "─── TPM2 ───"
     if [[ -c /dev/tpm0 || -c /dev/tpmrm0 ]]; then
-        ls /dev/tpm* 2>/dev/null
-        systemd-cryptenroll --tpm2-device=list 2>/dev/null || true
+        ls /dev/tpm* 2>/dev/null | sed 's/^/  /'
+        systemd-cryptenroll --tpm2-device=list 2>/dev/null | sed 's/^/  /' || true
     else
-        echo "No TPM2 device detected."
+        echo "  No TPM2 device detected."
     fi
     echo
-    echo "─── rd.luks.options on /proc/cmdline ───"
-    grep -oE 'rd\.luks\.options=[^ ]+' /proc/cmdline || echo "(none)"
+    echo "─── PCR 11 policy key ───"
+    if [[ -f "$TPM_PUB" ]]; then
+        echo "  $TPM_PUB"
+        openssl pkey -pubin -in "$TPM_PUB" -noout -text 2>/dev/null \
+            | head -2 | sed 's/^/  /'
+    else
+        echo "  Missing — run cache22-secureboot enable to generate."
+    fi
 }
 
 cmd_enroll() {
@@ -40,23 +48,26 @@ cmd_enroll() {
     [[ -b "$device" ]] || die "$device is not a block device."
     [[ -c /dev/tpm0 || -c /dev/tpmrm0 ]] || die "No TPM2 device detected."
     cryptsetup isLuks "$device" 2>/dev/null || die "$device is not a LUKS volume."
+    [[ -f "$TPM_PUB" ]] || die "$TPM_PUB missing — run cache22-secureboot enable first."
 
     cat <<EOF
 About to enroll TPM2 unlock for $device.
 
-Sealing to PCR 0+7 (firmware code + Secure Boot policy).
-- Survives:    kernel/initramfs/cmdline updates, bootc deployments,
-               package updates
-- Falls back:  firmware updates, Secure Boot toggles, boot from
-               another disk — TPM refuses to release the key,
-               passphrase prompt appears instead
+Sealed via signed PCR 11 policy. The LUKS keyslot trusts any PCR 11
+value for which a signature by $TPM_PUB exists — so kernel/initramfs
+updates that produce a new UKI keep working automatically (the new
+UKI ships its own .pcrsig signed by the same key).
 
 You will be prompted for the existing LUKS passphrase.
 EOF
     read -rp "Continue? [y/N] " confirm
     [[ "${confirm,,}" == "y" ]] || { echo "Aborted."; exit 0; }
 
-    systemd-cryptenroll --tpm2-device=auto --tpm2-pcrs=0+7 "$device"
+    systemd-cryptenroll \
+        --tpm2-device=auto \
+        --tpm2-public-key="$TPM_PUB" \
+        --tpm2-public-key-pcrs=11 \
+        "$device"
     echo "[OK] TPM2 enrolled. Reboot to use it."
 }
 

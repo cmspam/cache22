@@ -1,186 +1,169 @@
 #!/usr/bin/env bash
-# cache22-secureboot — manage Secure Boot enrollment for cache22.
-#
-# In the cache22 chain the kernel is signed with cache22's CI key.
-# That key is enrolled into MOK (Machine Owner Keys) via shim. The
-# installer queues MOK enrollment automatically on first install; this
-# tool is for users who skipped enrollment, want to re-queue it after
-# rotating the cache22 key, or want to remove it.
+# cache22-secureboot — manage the per-machine Secure Boot key + firmware
+# DB enrollment. UKIs and sd-boot are signed locally with this key.
 #
 # Subcommands:
-#   status                  Show SB state, MOK enrollment, kernel sigs.
-#   enroll                  Queue cache22 cert for MOK enrollment AND
-#                           set BootNext to the cache22 EFI entry so
-#                           the next reboot lands at MokManager directly.
-#   unenroll                Queue cache22 cert removal from MOK.
+#   status                  Show SB state, key fingerprint, enrollment.
+#   enable                  Generate key if missing, enroll into firmware
+#                           DB (PK/KEK/db ours + Microsoft DB). Firmware
+#                           must be in setup mode.
+#   disable                 Switch sd-boot to no-auto-enroll, leave key
+#                           on disk and Microsoft keys in DB.
+#   rotate-keys             Generate fresh keys, re-enroll, re-sign
+#                           sd-boot + every UKI, re-seal LUKS.
 #   --help
 
 set -euo pipefail
 
-CERT_PEM=/usr/share/cache22/secureboot.crt
-CERT_DER=/usr/share/cache22/secureboot.cer
-ESP_CERT=/boot/efi/EFI/BOOT/sbcert.der
-DEFAULT_PASSWORD="cache22sb"
+KEYDIR=/var/lib/cache22/sbkey
+SBCRT="$KEYDIR/keys/db/db.pem"
+ESP=/efi
+[[ -d "$ESP" ]] || ESP=/boot/efi
 
 require_root() {
-    if [[ ${EUID} -ne 0 ]]; then
-        echo "Error: must run as root (try: sudo cache22-secureboot $*)" >&2
-        exit 1
-    fi
+    [[ ${EUID} -eq 0 ]] || { echo "Error: must run as root (try: sudo cache22-secureboot $*)" >&2; exit 1; }
 }
-
 die() { echo "Error: $*" >&2; exit 1; }
 
-# Resolve a usable .der of the cache22 cert. Prefer the image-staged
-# /usr/share/cache22/secureboot.cer (built by build-sb-enrollment.sh);
-# fall back to the ESP copy the installer drops; finally derive from
-# the .pem if neither .der is present.
-get_cert_der() {
-    if [[ -f "$CERT_DER" ]]; then echo "$CERT_DER"; return 0; fi
-    if [[ -f "$ESP_CERT" ]]; then echo "$ESP_CERT"; return 0; fi
-    if [[ -f "$CERT_PEM" ]]; then
-        local tmp; tmp=$(mktemp --suffix=.der)
-        openssl x509 -in "$CERT_PEM" -outform DER -out "$tmp" 2>/dev/null \
-            || { rm -f "$tmp"; return 1; }
-        echo "$tmp"; return 0
-    fi
-    return 1
-}
-
-# Set the firmware's BootNext to the cache22 boot entry so the very
-# next reboot loads shim, which then sees the pending MOK and launches
-# MokManager. Without this the user might land in their default boot
-# entry (not necessarily cache22 if they dual-boot), which still works
-# — shim catches MokListNew on any cache22 boot — but BootNext makes
-# it deterministic.
-set_bootnext_to_cache22() {
-    if ! command -v efibootmgr >/dev/null 2>&1; then
-        echo "    (efibootmgr not installed; skipping BootNext)" >&2
-        return 0
-    fi
-    local idx
-    idx=$(efibootmgr 2>/dev/null \
-        | awk 'tolower($0) ~ /^boot[0-9a-f]{4}\*?[ \t]+cache22\b/ {
-                  s=$1; sub(/^[Bb]oot/,"",s); sub(/\*$/,"",s); print s; exit
-              }')
-    if [[ -z "$idx" ]]; then
-        echo "    (no UEFI boot entry labelled 'cache22' found; relying on default boot order)"
-        return 0
-    fi
-    efibootmgr --bootnext "$idx" 2>&1 | sed 's/^/    /'
-}
+ensure_keys() { /usr/libexec/cache22/sb-key-init >/dev/null; }
 
 cmd_status() {
     echo "─── Firmware ───"
     if [[ ! -d /sys/firmware/efi ]]; then
-        echo "Not booted in UEFI mode."
+        echo "  Not booted in UEFI mode."
         return
     fi
-    bootctl status 2>/dev/null | grep -iE 'secure boot|setup mode' | sed 's/^/  /' || true
-    if command -v mokutil >/dev/null 2>&1; then
-        echo "  $(mokutil --sb-state 2>&1)"
+    bootctl status 2>/dev/null | grep -iE 'secure boot|setup mode|firmware' | sed 's/^/  /' || true
+
+    echo
+    echo "─── Per-machine SB key ───"
+    if [[ -f "$SBCRT" ]]; then
+        openssl x509 -in "$SBCRT" -noout -subject -dates -fingerprint -sha256 2>/dev/null \
+            | sed 's/^/  /'
+    else
+        echo "  Not generated yet — run 'sudo cache22-secureboot enable'."
     fi
 
     echo
-    echo "─── cache22 SB cert ───"
-    if [[ -f "$CERT_PEM" ]]; then
-        openssl x509 -in "$CERT_PEM" -noout -subject -dates 2>/dev/null | sed 's/^/  /'
-    else
-        echo "  Missing — image overlay incomplete."
+    echo "─── sbctl enrollment ───"
+    if command -v sbctl >/dev/null 2>&1; then
+        sbctl status 2>&1 | sed 's/^/  /' || true
     fi
 
     echo
-    echo "─── MOK enrollment ───"
-    if ! command -v mokutil >/dev/null 2>&1; then
-        echo "  mokutil not installed."
-        return
-    fi
-    if mokutil --list-enrolled 2>&1 | grep -qiE 'cache22|cache 22'; then
-        echo "  cache22 cert: ENROLLED in MOK"
+    echo "─── Booted UKI ───"
+    local uki
+    uki=$(find "$ESP/EFI/Linux" -maxdepth 1 -name 'cache22-*.efi' 2>/dev/null \
+            | head -1)
+    if [[ -n "$uki" ]]; then
+        echo "  $uki"
+        sbverify --list "$uki" 2>&1 | grep -E 'subject|issuer' | head -2 | sed 's/^/  /' || \
+            echo "  (sbverify reports no signature)"
     else
-        echo "  cache22 cert: NOT enrolled in MOK"
-        echo "    → run 'sudo cache22-secureboot enroll' to queue enrollment"
-    fi
-    if mokutil --list-new 2>&1 | grep -qi 'sha'; then
-        echo "  pending MOK requests: yes (presented on next reboot)"
-    fi
-
-    echo
-    echo "─── Kernel signature ───"
-    local current_kver
-    current_kver=$(uname -r)
-    local vmlinuz=/usr/lib/modules/${current_kver}/vmlinuz
-    if [[ -f "$vmlinuz" ]]; then
-        if sbverify --list "$vmlinuz" 2>&1 | grep -q 'image signature issuers'; then
-            sbverify --list "$vmlinuz" 2>&1 | grep -E 'subject|issuer' | head -2 | sed 's/^/  /'
-        else
-            echo "  $vmlinuz: UNSIGNED"
-        fi
-    else
-        echo "  $vmlinuz not found (custom kernel install?)"
+        echo "  No cache22 UKI found in $ESP/EFI/Linux/"
     fi
 }
 
-cmd_enroll() {
-    require_root enroll
-    command -v mokutil >/dev/null 2>&1 || die "mokutil not installed."
-    local der; der=$(get_cert_der) || die "cache22 cert not found at $CERT_DER, $ESP_CERT, or $CERT_PEM"
+cmd_enable() {
+    require_root
+    ensure_keys
+    command -v sbctl >/dev/null 2>&1 || die "sbctl not installed"
 
-    echo "==> Queuing cache22 cert for MOK enrollment ($der)"
-    printf '%s\n%s\n' "$DEFAULT_PASSWORD" "$DEFAULT_PASSWORD" \
-        | mokutil --import "$der" \
-        | sed 's/^/    /'
+    local sb_state
+    sb_state=$(bootctl --print-secure-boot-state 2>/dev/null || echo unknown)
+    local setup_mode
+    setup_mode=$(bootctl --print-secure-boot-state 2>/dev/null | grep -iq 'setup' && echo yes || echo no)
 
-    echo "==> Setting BootNext to cache22 entry so MokManager launches on next reboot"
-    set_bootnext_to_cache22
+    cat <<EOF
+About to enroll the per-machine cache22 SB key into firmware DB.
+
+This requires the firmware to be in *setup mode* (Platform Key cleared).
+Enter your firmware setup utility, find Secure Boot settings, and
+either:
+  - Clear / reset / delete the Platform Key, OR
+  - Switch SB mode to "Setup" / "Custom",
+then save & exit. Boot back into cache22 and re-run this command.
+
+Current state: SB=${sb_state}
+
+Microsoft DB keys will be enrolled too (--microsoft) so any signed
+binary you currently use (Windows, fwupd, signed firmware updates,
+hardware option ROMs) keeps working.
+
+EOF
+    read -rp "Proceed with enrollment now? [y/N] " confirm
+    [[ "${confirm,,}" == "y" ]] || { echo "Aborted."; exit 0; }
+
+    echo "==> sbctl enroll-keys --microsoft"
+    sbctl enroll-keys --microsoft 2>&1 | sed 's/^/    /'
+
+    echo "==> Re-signing sd-boot + UKIs with the enrolled key"
+    systemctl start cache22-resign-uki.service
 
     cat <<EOF
 
-[OK] MOK enrollment queued.
+[OK] Enrollment complete.
+  - SB DB now contains: cache22 PK/KEK/db + Microsoft DB keys.
+  - sd-boot + all per-deploy UKIs re-signed with the cache22 key.
 
-On next reboot:
-  1. MokManager (blue screen) appears.
-  2. Choose "Enroll MOK" → "Continue" → "Yes".
-  3. Enter the password: ${DEFAULT_PASSWORD}
-  4. Choose "Reboot".
+If LUKS+TPM auto-unlock is set up, run:
+    sudo cache22-encryption enroll <device>
+to (re-)bind the LUKS keyslot to the new SB state.
 
-If the password fails or MokManager doesn't auto-launch, choose
-"Enroll key from disk" and select /EFI/BOOT/sbcert.der instead.
-
-Reboot now with: sudo systemctl reboot
+Reboot to verify everything boots end-to-end.
 EOF
 }
 
-cmd_unenroll() {
-    require_root unenroll
-    command -v mokutil >/dev/null 2>&1 || die "mokutil not installed."
-    local der; der=$(get_cert_der) || die "cache22 cert not found"
-
-    echo "==> Queuing cache22 cert removal from MOK"
-    printf '%s\n%s\n' "$DEFAULT_PASSWORD" "$DEFAULT_PASSWORD" \
-        | mokutil --delete "$der" \
-        | sed 's/^/    /'
+cmd_disable() {
+    require_root
+    command -v sbctl >/dev/null 2>&1 || die "sbctl not installed"
 
     cat <<EOF
+About to:
+  - reset the firmware DB so cache22 keys are no longer trusted
+    (Microsoft DB keys remain),
+  - leave the local key files at $KEYDIR (so re-enable is one
+    command),
+  - leave UKIs on the ESP signed (firmware will reject them while
+    SB is on; you'll need to disable SB or re-enable cache22 keys).
 
-[OK] Removal queued. On next reboot, MokManager prompts for the same
-password (${DEFAULT_PASSWORD}) to confirm removal.
-
-After removal, cache22-signed kernels will fail shim verification on
-boots with SB on. Either disable SB in firmware or re-enroll before
-rebooting again.
 EOF
+    read -rp "Proceed? [y/N] " confirm
+    [[ "${confirm,,}" == "y" ]] || { echo "Aborted."; exit 0; }
+
+    sbctl reset 2>&1 | sed 's/^/    /' || true
+    echo "[OK] Disabled. Boot proceeds with stock-MS-only DB until you re-enable."
+}
+
+cmd_rotate() {
+    require_root
+    cat <<EOF
+About to rotate the per-machine SB + TPM signing keys. Steps:
+  1. Move existing keys to $KEYDIR.old-$(date +%s)
+  2. Generate fresh keys
+  3. Re-enroll into firmware DB (requires setup mode again)
+  4. Re-sign sd-boot + all UKIs
+  5. Re-bind LUKS TPM keyslot to the new TPM key (if enrolled)
+
+EOF
+    read -rp "Proceed? [y/N] " confirm
+    [[ "${confirm,,}" == "y" ]] || { echo "Aborted."; exit 0; }
+
+    local backup="${KEYDIR}.old-$(date +%s)"
+    mv "$KEYDIR" "$backup"
+    echo "    backup: $backup"
+
+    /usr/libexec/cache22/sb-key-init
+    cmd_enable
 }
 
 case "${1:-status}" in
-    status)             cmd_status ;;
-    enroll|enable)      cmd_enroll ;;
-    unenroll|disable)   cmd_unenroll ;;
-    -h|--help)
-        sed -n '2,16p' "$0" | sed 's/^# \?//'
-        ;;
+    status)            cmd_status ;;
+    enable|enroll)     cmd_enable ;;
+    disable|unenroll)  cmd_disable ;;
+    rotate-keys)       cmd_rotate ;;
+    -h|--help)         sed -n '2,15p' "$0" | sed 's/^# \?//' ;;
     *)
-        echo "Usage: cache22-secureboot [status|enroll|unenroll|--help]" >&2
-        exit 1
-        ;;
+        echo "Usage: cache22-secureboot [status|enable|disable|rotate-keys|--help]" >&2
+        exit 1 ;;
 esac
