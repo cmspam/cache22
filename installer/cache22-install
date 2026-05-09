@@ -9,8 +9,8 @@ DEFAULT_HOSTNAME="cache22"
 DEFAULT_FS="btrfs"
 DEFAULT_TZ="Asia/Tokyo"
 DEFAULT_LOCALE="en_US.UTF-8"
-DEFAULT_ESP_SIZE="512M"
-DEFAULT_BOOT_SIZE="2G"
+# ESP holds sd-boot + per-deploy UKIs (one ~150 MiB UKI per kept deploy).
+DEFAULT_ESP_SIZE="2G"
 DEFAULT_SCRATCH_SIZE="30G"
 TARGET=/var/mnt/target
 LOG=/var/log/cache22-install.log
@@ -43,12 +43,10 @@ declare -A CFG=(
     [mode]=""
     [disk]=""
     [esp_part]=""
-    [boot_part]=""
     [root_part]=""
     [scratch_part]=""
     [filesystem]="$DEFAULT_FS"
     [esp_size]="$DEFAULT_ESP_SIZE"
-    [boot_size]="$DEFAULT_BOOT_SIZE"
     [scratch_size]="$DEFAULT_SCRATCH_SIZE"
     [reserve_size]=""
     [luks]="no"
@@ -78,7 +76,7 @@ confirm_destructive() {
     local target extra=""
     case "${CFG[mode]}" in
         custom)
-            target="partitions ${CFG[esp_part]}, ${CFG[boot_part]}, ${CFG[root_part]}, ${CFG[scratch_part]}" ;;
+            target="partitions ${CFG[esp_part]}, ${CFG[root_part]}, ${CFG[scratch_part]}" ;;
         freespace)
             target="cache22's new partitions inside the existing free space on ${CFG[disk]}"
             extra="  Existing partitions on ${CFG[disk]} will NOT be touched." ;;
@@ -200,7 +198,6 @@ Common flags:
                        discard=async; /var/home preserved across
                        cache22-repair. xfs/ext4 are single-volume.
   --esp-size SIZE      ESP size in auto mode (default: $DEFAULT_ESP_SIZE)
-  --boot-size SIZE     /boot size in auto mode (default: $DEFAULT_BOOT_SIZE)
   --scratch-size SIZE  scratch size in auto mode (default: $DEFAULT_SCRATCH_SIZE)
   --reserve-size SIZE  free space to leave at end of disk (auto-reserve;
                        e.g. 100G, 200GiB)
@@ -364,10 +361,8 @@ step_disk() {
         say "If you need to (re)partition first, type 'shell' to drop to bash"
         say "(cfdisk + parted are available). Then type 'exit' to come back."
         printf '\n'
-        say "cache22 uses a four-partition layout (bazzite/Silverblue style):"
-        say "  ESP        FAT32, ~512 MB, mounted at /boot/efi"
-        say "  /boot      ext4 XBOOTLDR, ~2 GB, holds kernel + initramfs + BLS"
-        say "             entries (size for ~10 rollback slots)"
+        say "cache22 uses a three-partition layout:"
+        say "  ESP        FAT32, ~2 GB, mounted at /efi (sd-boot + UKIs)"
         say "  root       btrfs/xfs/ext4, optionally LUKS"
         say "  scratch    ext4, freed after install"
         printf '\n'
@@ -378,12 +373,7 @@ step_disk() {
             CFG[esp_part]="$REPLY"; break
         done
         while :; do
-            prompt "/boot partition (XBOOTLDR ext4, e.g. /dev/sda2)" "${CFG[boot_part]}" || return $?
-            [[ -b "$REPLY" ]] || { printf '  Not a block device.\n'; continue; }
-            CFG[boot_part]="$REPLY"; break
-        done
-        while :; do
-            prompt "Root partition (e.g. /dev/sda3)" "${CFG[root_part]}" || return $?
+            prompt "Root partition (e.g. /dev/sda2)" "${CFG[root_part]}" || return $?
             [[ -b "$REPLY" ]] || { printf '  Not a block device.\n'; continue; }
             CFG[root_part]="$REPLY"; break
         done
@@ -554,7 +544,6 @@ step_review() {
         case "${CFG[mode]}" in
             custom)
                 printf '  2) ESP part:    %s\n' "${CFG[esp_part]}"
-                printf '     /boot part:  %s\n' "${CFG[boot_part]}"
                 printf '     root part:   %s\n' "${CFG[root_part]}"
                 printf '     scratch:     %s\n' "${CFG[scratch_part]}" ;;
             freespace)
@@ -639,7 +628,6 @@ parse_args() {
             --mode)         CFG[mode]="$2"; shift 2 ;;
             --disk)         CFG[disk]="$2"; CFG[mode]="${CFG[mode]:-auto}"; shift 2 ;;
             --esp)          CFG[esp_part]="$2"; CFG[mode]="custom"; shift 2 ;;
-            --boot)         CFG[boot_part]="$2"; CFG[mode]="custom"; shift 2 ;;
             --root)         CFG[root_part]="$2"; CFG[mode]="custom"; shift 2 ;;
             --scratch)
                 CFG[scratch_part]="$2"
@@ -649,7 +637,6 @@ parse_args() {
                 shift 2 ;;
             --filesystem)   CFG[filesystem]="$2"; shift 2 ;;
             --esp-size)     CFG[esp_size]="$2"; shift 2 ;;
-            --boot-size)    CFG[boot_size]="$2"; shift 2 ;;
             --scratch-size) CFG[scratch_size]="$2"; shift 2 ;;
             --reserve-size) CFG[reserve_size]="$2"; CFG[mode]="${CFG[mode]:-auto-reserve}"; shift 2 ;;
             --luks)         CFG[luks]="yes"; shift ;;
@@ -676,7 +663,7 @@ needs_wizard() {
     [[ -z "${CFG[mode]}" ]] && return 0
     case "${CFG[mode]}" in
         custom)
-            [[ -z "${CFG[esp_part]}" || -z "${CFG[boot_part]}" || -z "${CFG[root_part]}" || -z "${CFG[scratch_part]}" ]] && return 0 ;;
+            [[ -z "${CFG[esp_part]}" || -z "${CFG[root_part]}" || -z "${CFG[scratch_part]}" ]] && return 0 ;;
         auto-reserve)
             [[ -z "${CFG[disk]}" || -z "${CFG[reserve_size]}" ]] && return 0 ;;
         auto|freespace)
@@ -695,7 +682,7 @@ needs_wizard() {
 # (openssl missing → empty password hash → passwordless account).
 # Refuse to start if anything's missing.
 require_tools() {
-    local need=(openssl podman bootc mokutil efibootmgr mkfs.fat mkfs.ext4 mkfs.btrfs btrfs sgdisk parted blkid mountpoint dmsetup pvs vgchange mdadm wipefs lsblk udevadm)
+    local need=(openssl podman bootc sbctl ukify bootctl efibootmgr mkfs.fat mkfs.ext4 mkfs.btrfs btrfs sgdisk parted blkid mountpoint dmsetup pvs vgchange mdadm wipefs lsblk udevadm)
     local missing=()
     local t
     for t in "${need[@]}"; do
@@ -764,7 +751,7 @@ preflight() {
 }
 
 # ─── Install ───────────────────────────────────────────────────────────
-ROOT_DEV=""; ROOT_UUID=""; BOOT_UUID=""; ESP_UUID=""
+ROOT_DEV=""; ROOT_UUID=""; ESP_UUID=""
 
 # Pick tmpfs vs partition for /var/lib/containers based on available RAM.
 # Only runs in auto mode when the user hasn't explicitly chosen.
@@ -949,14 +936,13 @@ partition_auto() {
         *)                                  PSEP=""  ;;
     esac
     CFG[esp_part]="${DISK}${PSEP}1"
-    CFG[boot_part]="${DISK}${PSEP}2"
-    CFG[root_part]="${DISK}${PSEP}3"
+    CFG[root_part]="${DISK}${PSEP}2"
 
     local using_tmpfs=0
     if [[ "${CFG[scratch_part]}" == "tmpfs" ]]; then
         using_tmpfs=1
     else
-        CFG[scratch_part]="${DISK}${PSEP}4"
+        CFG[scratch_part]="${DISK}${PSEP}3"
     fi
 
     umount -R "$TARGET" 2>/dev/null || true
@@ -977,35 +963,26 @@ partition_auto() {
 
     sgdisk --zap-all "$DISK"
     sgdisk --new="1:0:+${CFG[esp_size]}"  --typecode=1:ef00 --change-name=1:cache22-esp  "$DISK"
-    sgdisk --new="2:0:+${CFG[boot_size]}" --typecode=2:ea00 --change-name=2:cache22-boot "$DISK"
     if [[ "${CFG[mode]}" == "auto-reserve" ]]; then
-        # Wipe the disk but leave CFG[reserve_size] unallocated at the end.
-        # During install, scratch sits inside the eventual reserve area too
-        # (since reclaim_scratch hasn't run yet); after install, scratch
-        # is removed and root is grown to (disk_end - reserve_size). The
-        # reserved tail is what the user gets back as free space.
         local reserve_b reserve_mib end_offset_mib
         reserve_b=$(size_to_bytes "${CFG[reserve_size]}") \
             || die "Bad reserve size: ${CFG[reserve_size]}"
         reserve_mib=$(( reserve_b / 1024 / 1024 ))
         if (( using_tmpfs )); then
-            # tmpfs scratch: root ends reserve_mib before disk end, no partition 4.
-            sgdisk --new="3:0:-${reserve_mib}M" --typecode=3:8304 --change-name=3:cache22-root "$DISK"
+            sgdisk --new="2:0:-${reserve_mib}M" --typecode=2:8304 --change-name=2:cache22-root "$DISK"
         else
-            # Root + scratch share the area before the reserved tail.
-            local scratch_b scratch_mib root_end_mib
+            local scratch_b scratch_mib
             scratch_b=$(size_to_bytes "${CFG[scratch_size]}")
             scratch_mib=$(( scratch_b / 1024 / 1024 ))
             end_offset_mib=$(( reserve_mib + scratch_mib ))
-            sgdisk --new="3:0:-${end_offset_mib}M" --typecode=3:8304 --change-name=3:cache22-root "$DISK"
-            sgdisk --new="4:0:+${scratch_mib}M"   --typecode=4:8300 --change-name=4:cache22-scratch "$DISK"
+            sgdisk --new="2:0:-${end_offset_mib}M" --typecode=2:8304 --change-name=2:cache22-root "$DISK"
+            sgdisk --new="3:0:+${scratch_mib}M"    --typecode=3:8300 --change-name=3:cache22-scratch "$DISK"
         fi
     elif (( using_tmpfs )); then
-        # tmpfs scratch — root takes the rest of the disk; no partition 4.
-        sgdisk --new="3:0:0"                      --typecode=3:8304 --change-name=3:cache22-root    "$DISK"
+        sgdisk --new="2:0:0"                      --typecode=2:8304 --change-name=2:cache22-root    "$DISK"
     else
-        sgdisk --new="3:0:-${CFG[scratch_size]}"  --typecode=3:8304 --change-name=3:cache22-root    "$DISK"
-        sgdisk --new="4:0:0"                      --typecode=4:8300 --change-name=4:cache22-scratch "$DISK"
+        sgdisk --new="2:0:-${CFG[scratch_size]}"  --typecode=2:8304 --change-name=2:cache22-root    "$DISK"
+        sgdisk --new="3:0:0"                      --typecode=3:8300 --change-name=3:cache22-scratch "$DISK"
     fi
     partprobe "$DISK" || true
     udevadm settle || true
@@ -1027,7 +1004,6 @@ partition_freespace() {
         | awk '/Free Space/{gsub(/B/,"",$3); if ($3+0 > max){max=$3+0}} END{print max+0}')
     local needed_b
     needed_b=$(( $(size_to_bytes "${CFG[esp_size]}") \
-              + $(size_to_bytes "${CFG[boot_size]}") \
               + $(size_to_bytes "${CFG[scratch_size]}") \
               + 4 * 1024 * 1024 * 1024 ))   # min 4G headroom for root
     if (( largest_b < needed_b )); then
@@ -1047,23 +1023,13 @@ partition_freespace() {
     # If GPT is missing, sgdisk creates one. If MBR, sgdisk converts.
     # Either way, do NOT --zap-all (would destroy existing partitions).
     sgdisk --new="0:0:+${CFG[esp_size]}"  --typecode=0:ef00 --change-name=0:cache22-esp  "$DISK"
-    sgdisk --new="0:0:+${CFG[boot_size]}" --typecode=0:ea00 --change-name=0:cache22-boot "$DISK"
     if (( using_tmpfs )); then
-        # Root fills the rest of the largest free region. sgdisk's
-        # "0" end means "extend to end of largest free region".
         sgdisk --largest-new=0 --typecode=0:8304 --change-name=0:cache22-root "$DISK"
     else
-        # Root takes (largest free - boot - esp - scratch); scratch
-        # takes the remaining space (which is exactly scratch_size
-        # since it sits in the same free region).
-        local esp_b boot_b scratch_b root_b root_mib scratch_mib
+        local esp_b scratch_b root_b root_mib scratch_mib
         esp_b=$(size_to_bytes "${CFG[esp_size]}")
-        boot_b=$(size_to_bytes "${CFG[boot_size]}")
         scratch_b=$(size_to_bytes "${CFG[scratch_size]}")
-        # After ESP+boot are placed, the remaining free region is:
-        #   largest_b - esp_b - boot_b
-        # Root gets (remaining - scratch_b), scratch gets scratch_b.
-        root_b=$(( largest_b - esp_b - boot_b - scratch_b ))
+        root_b=$(( largest_b - esp_b - scratch_b ))
         (( root_b > 4 * 1024**3 )) || die "Computed root size too small: $((root_b/1024/1024/1024)) GiB"
         root_mib=$(( root_b / 1024 / 1024 ))
         scratch_mib=$(( scratch_b / 1024 / 1024 ))
@@ -1076,7 +1042,6 @@ partition_freespace() {
 
     # Resolve partition device paths by GPT name (numbers aren't predictable).
     CFG[esp_part]=$(partlabel_to_dev cache22-esp)
-    CFG[boot_part]=$(partlabel_to_dev cache22-boot)
     CFG[root_part]=$(partlabel_to_dev cache22-root)
     if (( using_tmpfs )); then
         CFG[scratch_part]="tmpfs"
@@ -1084,13 +1049,11 @@ partition_freespace() {
         CFG[scratch_part]=$(partlabel_to_dev cache22-scratch)
     fi
     [[ -b "${CFG[esp_part]}"  ]] || die "ESP partition not created"
-    [[ -b "${CFG[boot_part]}" ]] || die "Boot partition not created"
     [[ -b "${CFG[root_part]}" ]] || die "Root partition not created"
 }
 
 partition_custom_check() {
     [[ -b "${CFG[esp_part]}"  ]] || die "ESP partition ${CFG[esp_part]} not found"
-    [[ -b "${CFG[boot_part]}" ]] || die "Boot partition ${CFG[boot_part]} not found"
     [[ -b "${CFG[root_part]}" ]] || die "Root partition ${CFG[root_part]} not found"
     [[ "${CFG[scratch_part]}" == "tmpfs" || -b "${CFG[scratch_part]}" ]] || die "Scratch ${CFG[scratch_part]} not found"
 }
@@ -1120,10 +1083,6 @@ setup_target() {
     fi
 
     mkfs.fat -F32 -n EFI-SYSTEM "${CFG[esp_part]}" >/dev/null
-    # /boot label MUST be "boot" — bootupd's grub2-static config
-    # (10_blscfg.cfg) does `search --label boot --set root` to locate
-    # the partition before sourcing /boot/grub2/grub.cfg.d/.
-    mkfs.ext4 -F -q -L boot "${CFG[boot_part]}"
     case "${CFG[filesystem]}" in
         btrfs) mkfs.btrfs -L cache22-root -f "$ROOT_DEV" >/dev/null ;;
         xfs)   mkfs.xfs   -L cache22-root -f "$ROOT_DEV" >/dev/null ;;
@@ -1131,7 +1090,6 @@ setup_target() {
     esac
 
     ROOT_UUID=$(blkid -s UUID -o value "$ROOT_DEV")
-    BOOT_UUID=$(blkid -s UUID -o value "${CFG[boot_part]}")
     ESP_UUID=$(blkid -s UUID -o value "${CFG[esp_part]}")
 
     # On btrfs, lay out the canonical bootc/Silverblue/Bazzite-style
@@ -1155,12 +1113,12 @@ setup_target() {
     fi
     # rshared so podman bind sees the submounts via setns.
     mount --make-rshared "$TARGET" || true
-    mkdir -p "$TARGET/boot"
-    mount -t ext4 "${CFG[boot_part]}" "$TARGET/boot"
-    mount --make-rshared "$TARGET/boot" || true
-    mkdir -p "$TARGET/boot/efi"
-    mount "${CFG[esp_part]}" "$TARGET/boot/efi"
-    mount --make-rshared "$TARGET/boot/efi" || true
+    # /boot stays as a regular directory on the rootfs (no separate
+    # partition). ostree may write vestigial BLS entries there; we
+    # ignore them — sd-boot reads UKIs from the ESP only.
+    mkdir -p "$TARGET/boot" "$TARGET/efi"
+    mount "${CFG[esp_part]}" "$TARGET/efi"
+    mount --make-rshared "$TARGET/efi" || true
 }
 
 run_bootc_install() {
@@ -1168,37 +1126,12 @@ run_bootc_install() {
     podman pull "${CFG[image]}"
     df -h /var/lib/containers
 
-    local LUKS_KARGS=()
-    if [[ "${CFG[luks]}" == "yes" ]]; then
-        local LUKS_PART_UUID
-        LUKS_PART_UUID=$(blkid -s UUID -o value "${CFG[root_part]}")
-        # tpm2-device=auto is permissive: if the user later runs
-        # `cache22-encryption enroll`, unlock is automatic; if they don't,
-        # systemd-cryptsetup falls through to the passphrase prompt.
-        LUKS_KARGS=(
-            --karg="rd.luks.uuid=$LUKS_PART_UUID"
-            --karg="rd.luks.name=$LUKS_PART_UUID=cache22-root"
-            --karg="rd.luks.options=$LUKS_PART_UUID=discard,tpm2-device=auto"
-        )
-    fi
-
-    # On btrfs, ostree-prepare-root needs to mount the `root` subvol
-    # (not the FS toplevel) with the same options used at install. The
-    # rootflags karg flows through to /sysroot's mount.
-    local FS_KARGS=()
-    if [[ "${CFG[filesystem]}" == "btrfs" ]]; then
-        FS_KARGS=( --karg="rootflags=subvol=root,$BTRFS_OPTS" )
-    fi
-
-    # legacy ostree backend; --bootloader=grub so bootc invokes bootupd
-    # (which the cache22 image now ships) to install shim + grub2 onto
-    # the ESP from /usr/lib/efi/{shim,grub2}/<NVR>/EFI/cache22/. bootupd
-    # also drops its grub2-static configs (10_blscfg.cfg etc.) at
-    # /boot/grub2/, writes /boot/grub2/bootuuid.cfg, runs efibootmgr,
-    # and creates /boot/bootupd-state.json — replacing all the manual
-    # ESP-copying + grub.cfg-writing the installer used to do.
-    # (bootc 1.x accepts only grub|systemd|none; "auto" doesn't exist.)
-    say "Running bootc install to-filesystem (legacy ostree backend, bootupd-managed bootloader)"
+    # --bootloader=none: cache22 owns the bootloader install. After
+    # bootc places the deploy, install_sb_and_uki generates the per-
+    # machine SB key, signs sd-boot, runs `bootctl install` against
+    # the ESP, and builds the first UKI from the deploy's kernel +
+    # initramfs + the cmdline assembled in configure_deploy.
+    say "Running bootc install to-filesystem (--bootloader=none)"
     podman run --rm --privileged --pid=host \
         --mount "type=bind,src=$TARGET,dst=/target,bind-propagation=rshared" \
         -v /dev:/dev \
@@ -1211,116 +1144,80 @@ run_bootc_install() {
             --target-no-signature-verification \
             --generic-image \
             --stateroot default \
-            --bootloader=grub \
-            --karg="root=UUID=$ROOT_UUID" \
-            "${LUKS_KARGS[@]}" \
-            "${FS_KARGS[@]}" \
+            --bootloader=none \
             --root-mount-spec="UUID=$ROOT_UUID" \
             --skip-finalize \
             /target
     local rc=$?
     [[ $rc -eq 0 ]] || die "bootc install failed (exit $rc)"
-
-    install_cache22_esp_extras
 }
 
-# MOK enrollment password — the user types this at MokManager on
-# first boot to confirm the cache22 cert enrollment. Same value
-# Bazzite uses for the same purpose ("universalblue"); we picked one
-# that's specific to cache22 so it doesn't collide with other distros'
-# enrollments on dual-boot systems.
-MOK_PASSWORD="cache22sb"
+# Generate the per-machine SB + TPM signing keys inside the deployed
+# rootfs, install sd-boot to the ESP signed with that key, build the
+# first UKI for the just-installed deploy. Runs after configure_deploy
+# so /etc/cache22/extra-cmdline already has the per-machine LUKS / FS
+# kargs in place.
+install_sb_and_uki() {
+    say "Installing sd-boot + signing first UKI"
+    local DEPLOY_ETC; DEPLOY_ETC=$(deploy_etc)
+    local DEPLOY_ROOT; DEPLOY_ROOT=$(dirname "$DEPLOY_ETC")
+    local ESP="$TARGET/efi"
 
-# Add cache22-specific files to the ESP that bootupd doesn't manage.
-# `bootc install --bootloader=grub` (in run_bootc_install) already had
-# bootupd drop:
-#   /EFI/cache22/{shimx64,grubx64,mmx64}.efi  (Fedora-signed binaries)
-#   /EFI/BOOT/BOOTX64.EFI                     (removable-media fallback)
-#   /boot/grub2/grub.cfg + bootuuid.cfg       (bootupd's static configs)
-#   /boot/bootupd-state.json                  (state tracking)
-#   efibootmgr Boot#### entry pointing at /EFI/cache22/shimx64.efi
-#
-# What we add: the cache22 MOK cert (sbcert.der) so users can
-# manually enroll via MokManager's "Enroll key from disk" path. Trust
-# chain at first boot:
-#   firmware (MS keys in db) → shim → grub (Fedora cert in shim's
-#   vendor_cert) → kernel (cache22 cert, enrolled in MOK below).
-install_cache22_esp_extras() {
-    say "Adding cache22-specific files to the ESP"
-    local ESP="$TARGET/boot/efi"
-    install -d -m0755 "$ESP/EFI/BOOT"
+    # Bind-mount the running live env's /sys/firmware/efi/efivars into
+    # the chroot so bootctl install can talk to firmware vars (for the
+    # NVRAM Boot#### entry).
+    install -d "$DEPLOY_ROOT/sys/firmware/efi/efivars"
+    mount --bind /sys/firmware/efi/efivars "$DEPLOY_ROOT/sys/firmware/efi/efivars" 2>/dev/null || true
+    install -d "$DEPLOY_ROOT/dev"
+    mount --bind /dev "$DEPLOY_ROOT/dev" 2>/dev/null || true
+    install -d "$DEPLOY_ROOT/proc"
+    mount -t proc proc "$DEPLOY_ROOT/proc" 2>/dev/null || true
+    install -d "$DEPLOY_ROOT/sys"
+    mount --bind /sys "$DEPLOY_ROOT/sys" 2>/dev/null || true
 
-    # cache22 SB cert in DER form. Stable ESP path so the user can load
-    # it from MokManager's "Enroll key from disk" if the password-based
-    # `mokutil --import` enrollment fails for any reason.
-    local DEPLOY_ROOT; DEPLOY_ROOT=$(dirname "$(deploy_etc)")
-    local CERT_SRC="$DEPLOY_ROOT/usr/share/cache22/secureboot.cer"
-    [[ -f "$CERT_SRC" ]] || die "Missing $CERT_SRC (image build did not stage MOK cert)"
-    install -m0644 "$CERT_SRC" "$ESP/EFI/BOOT/sbcert.der"
+    # Bind the ESP into the chroot at the /efi path the chroot tools
+    # will use.
+    install -d "$DEPLOY_ROOT/efi"
+    mount --bind "$ESP" "$DEPLOY_ROOT/efi" 2>/dev/null || true
 
-    # MokManager copy at the removable-media path. bootupd places it at
-    # /EFI/cache22/mmx64.efi (next to the primary shim), but if firmware
-    # falls back to /EFI/BOOT/BOOTX64.EFI (removable-media boot), shim
-    # runs from /EFI/BOOT/ and looks for mmx64.efi alongside itself.
-    # Without this copy, MOK enrollment fails with "MokManager is
-    # missing on removable media" — observed in QEMU when efibootmgr
-    # didn't successfully register a cache22 Boot#### entry.
-    if [[ -f "$ESP/EFI/cache22/mmx64.efi" ]]; then
-        install -m0644 "$ESP/EFI/cache22/mmx64.efi" "$ESP/EFI/BOOT/mmx64.efi"
-    fi
+    # Generate per-machine SB + TPM keys.
+    chroot "$DEPLOY_ROOT" /usr/libexec/cache22/sb-key-init
 
-    # Explicit efibootmgr entry for /EFI/cache22/shimx64.efi. bootupd's
-    # `--update-firmware` is supposed to do this, but it doesn't always
-    # take from inside the install context (podman + bind-mounts make
-    # /sys/firmware/efi access flaky). Without an explicit entry,
-    # firmware falls back to /EFI/BOOT/BOOTX64.EFI and the boot path
-    # behaves as if the install was on removable media.
-    if command -v efibootmgr >/dev/null 2>&1 && [[ -d /sys/firmware/efi/efivars ]]; then
-        # Skip if cache22 entry already exists (bootupd worked on this hw).
-        if ! efibootmgr 2>/dev/null | grep -qE 'cache22'; then
-            local DISK="${CFG[disk]}"
-            efibootmgr --create --disk "$DISK" --part 1 \
-                --label "cache22" \
-                --loader "\\EFI\\cache22\\shimx64.efi" \
-                2>&1 | sed 's/^/    /' || \
-                say "  WARNING: efibootmgr --create failed; firmware will use removable-media fallback"
-        fi
-    fi
+    # Stage sbctl auto-enrollment files on the ESP. sd-boot picks
+    # these up at next boot when firmware is in setup mode and
+    # secure-boot-enroll = force is in loader.conf.
+    chroot "$DEPLOY_ROOT" sbctl enroll-keys --microsoft --export auth || \
+        say "  WARN: sbctl enroll-keys --export auth failed; user may need to run cache22-secureboot enable"
 
-    # /boot/boot self-symlink: bootc's BLS entries reference
-    # '/boot/ostree/...'; under blsuki that becomes
-    # ($root)/boot/ostree/... and $root IS the /boot partition itself,
-    # so the redundant /boot/ prefix needs the self-symlink to resolve.
-    # bootupd's static grub2 configs assume this is in place.
-    local XBL="$TARGET/boot"
-    [[ -e "$XBL/boot" ]] || ln -s . "$XBL/boot"
-}
+    # Install systemd-boot to the ESP. bootctl writes the NVRAM
+    # Boot#### entry, drops the loader.conf, and copies sd-boot to
+    # /efi/EFI/systemd/systemd-bootx64.efi + /efi/EFI/BOOT/BOOTX64.EFI.
+    chroot "$DEPLOY_ROOT" bootctl install --esp-path=/efi || \
+        die "bootctl install failed"
 
-# Queue the cache22 SB cert for MOK enrollment on first boot. shim sees
-# the pending request in the MokListNew NVRAM variable and launches
-# MokManager, which prompts for the enrollment password the user typed
-# at install time. Once enrolled, shim trusts cache22-signed kernels.
-queue_mok_enrollment() {
-    say "Queuing cache22 cert for MOK enrollment on first boot"
-    local DEPLOY_ROOT; DEPLOY_ROOT=$(dirname "$(deploy_etc)")
-    local CERT_DER="$DEPLOY_ROOT/usr/share/cache22/secureboot.cer"
-    [[ -f "$CERT_DER" ]] || die "Missing $CERT_DER (image build did not stage MOK cert)"
+    # Configure sd-boot for auto-enroll on next boot when firmware is
+    # in setup mode. If the user couldn't enter setup mode at install
+    # time, the loader.conf still works — they'll run cache22-secure-
+    # boot enable later.
+    install -d "$ESP/loader"
+    cat > "$ESP/loader/loader.conf" <<EOF
+default      cache22-*.efi
+timeout      3
+console-mode keep
+editor       no
+secure-boot-enroll force
+EOF
 
-    if ! command -v mokutil >/dev/null 2>&1; then
-        say "  mokutil not available in live env — skipping MOK queue"
-        say "  USER MUST manually enroll cache22 SB cert via MokManager"
-        say "  using /EFI/BOOT/sbcert.der on the ESP after first boot."
-        return 0
-    fi
+    # Build the first UKI (and re-sign sd-boot with the local key).
+    chroot "$DEPLOY_ROOT" /usr/libexec/cache22/resign-uki || \
+        die "first UKI build failed"
 
-    # mokutil --import is interactive; pipe the password twice (set + confirm).
-    if printf '%s\n%s\n' "$MOK_PASSWORD" "$MOK_PASSWORD" \
-            | mokutil --import "$CERT_DER" 2>&1 | sed 's/^/    /'; then
-        say "  MOK enrollment queued."
-    else
-        say "  WARNING: mokutil --import failed; user can still enroll"
-        say "  manually from /EFI/BOOT/sbcert.der at the MokManager prompt."
-    fi
+    # Tear down chroot mounts in reverse order.
+    umount "$DEPLOY_ROOT/efi" 2>/dev/null || true
+    umount "$DEPLOY_ROOT/sys" 2>/dev/null || true
+    umount "$DEPLOY_ROOT/proc" 2>/dev/null || true
+    umount "$DEPLOY_ROOT/dev" 2>/dev/null || true
+    umount "$DEPLOY_ROOT/sys/firmware/efi/efivars" 2>/dev/null || true
 }
 
 # Find the writable per-deploy /etc under either backend layout.
@@ -1353,11 +1250,8 @@ configure_deploy() {
         sed -i "s|^#\(${CFG[locale]} .*\)|\1|" "$DEPLOY_ETC/locale.gen"
     fi
 
-    if ! grep -q "UUID=$BOOT_UUID" "$DEPLOY_ETC/fstab" 2>/dev/null; then
-        echo "UUID=$BOOT_UUID  /boot      ext4  defaults              0 2" >> "$DEPLOY_ETC/fstab"
-    fi
     if ! grep -q "UUID=$ESP_UUID"  "$DEPLOY_ETC/fstab" 2>/dev/null; then
-        echo "UUID=$ESP_UUID   /boot/efi  vfat  umask=0077,shortname=winnt  0 2" >> "$DEPLOY_ETC/fstab"
+        echo "UUID=$ESP_UUID   /efi  vfat  umask=0077,shortname=winnt  0 2" >> "$DEPLOY_ETC/fstab"
     fi
     # btrfs: /var/home lives in its own subvol so the repair tool can
     # wipe everything else without touching user data. / is handled by
@@ -1377,21 +1271,26 @@ configure_deploy() {
         fi
     fi
 
-    # bootc's `install --karg=rd.luks.*` doesn't reliably land in the BLS
-    # entry, so patch it in directly. Idempotent.
-    if [[ "${CFG[luks]}" == "yes" ]]; then
-        local LUKS_PART_UUID
-        LUKS_PART_UUID=$(blkid -s UUID -o value "${CFG[root_part]}")
-        local LUKS_OPTS="rd.luks.uuid=$LUKS_PART_UUID rd.luks.name=$LUKS_PART_UUID=cache22-root rd.luks.options=$LUKS_PART_UUID=discard"
-        shopt -s nullglob
-        for entry in "$TARGET"/boot/loader/entries/*.conf "$TARGET"/boot/efi/loader/entries/*.conf; do
-            if ! grep -q 'rd\.luks\.uuid=' "$entry"; then
-                sed -i "/^options /s| *\$| $LUKS_OPTS|" "$entry"
-                say "  patched $(basename "$entry") with rd.luks kargs"
-            fi
-        done
-        shopt -u nullglob
-    fi
+    # Per-machine kargs go into /etc/cache22/extra-cmdline. resign-uki
+    # bakes them into the UKI's .cmdline section. Order matters: root=
+    # comes first; rd.luks.* and rootflags follow.
+    install -d "$DEPLOY_ETC/cache22"
+    {
+        echo "# Per-machine kargs written by cache22-install. Do not delete"
+        echo "# the lines below unless you know what you're doing — they tell"
+        echo "# the kernel where to find the rootfs (and how to unlock it)."
+        echo "root=UUID=$ROOT_UUID"
+        if [[ "${CFG[luks]}" == "yes" ]]; then
+            local LUKS_PART_UUID
+            LUKS_PART_UUID=$(blkid -s UUID -o value "${CFG[root_part]}")
+            echo "rd.luks.uuid=$LUKS_PART_UUID"
+            echo "rd.luks.name=$LUKS_PART_UUID=cache22-root"
+            echo "rd.luks.options=$LUKS_PART_UUID=discard,tpm2-device=auto"
+        fi
+        if [[ "${CFG[filesystem]}" == "btrfs" ]]; then
+            echo "rootflags=subvol=root,$BTRFS_OPTS"
+        fi
+    } > "$DEPLOY_ETC/cache22/extra-cmdline"
 
     local UID_=1000 GID_=1000
     local HASHED; HASHED=$(openssl passwd -6 "${CFG[password]}")
@@ -1657,7 +1556,7 @@ main() {
     setup_target
     run_bootc_install
     configure_deploy
-    queue_mok_enrollment
+    install_sb_and_uki
     reclaim_scratch
 
     cat <<DONE
@@ -1670,15 +1569,29 @@ main() {
     timezone: ${CFG[timezone]}
     log:      $LOG
 
-  Secure Boot — first reboot:
-    On first reboot, MokManager will appear (blue screen).
-    Choose "Enroll MOK" → "Continue" → "Yes", then enter the
-    enrollment password:
+  Secure Boot — IMPORTANT FIRST STEP
 
-        ${MOK_PASSWORD}
+    cache22 ships with a per-machine SB key already generated and
+    sd-boot pre-staged with auto-enroll. To complete enrollment,
+    your firmware must be in *setup mode* on the first boot.
 
-    If MokManager doesn't auto-launch or the password fails, choose
-    "Enroll key from disk" and select /EFI/BOOT/sbcert.der instead.
+    BEFORE rebooting:
+      1. Enter your firmware setup utility (usually F2 / Del / F10
+         at power-on; varies by vendor).
+      2. Find Secure Boot settings.
+      3. Either DISABLE Secure Boot, OR clear / reset the Platform
+         Key (puts firmware into setup mode).
+      4. Save & exit.
+      5. Boot into cache22.
+
+    On first boot, sd-boot will auto-enroll cache22 + Microsoft DB
+    keys (so dual-boot Windows keeps working). After that, SB is
+    on, all UKIs are signature-verified, and you can re-run
+    'sudo cache22-secureboot status' to confirm.
+
+    If you skip this and boot with SB on + factory keys, the
+    firmware will refuse to load sd-boot and you'll need to enter
+    setup mode manually anyway.
 ══════════════════════════════════════════════════
 DONE
 

@@ -1,22 +1,19 @@
 #!/usr/bin/env bash
 # cache22-repair — reinstall the cache22 OS image without touching
-# user data or configuration. Wipes only the bits that belong to the
-# image (ostree repo, deploy commits, /boot kernel/initramfs, ESP
-# bootloader) and reinstalls them. Keeps:
+# user data or configuration. Wipes only the image bits (ostree repo,
+# deploy commits, ESP bootloader + UKIs) and reinstalls them. Keeps:
 #   - /var (so /home, /var/log, /var/lib, /var/usrlocal, /root, etc.)
 #   - per-deploy /etc (user accounts, hostname, NM connections, sudoers,
 #     ssh host keys, anything you added or modified)
+#   - the per-machine SB key at /var/lib/cache22/sbkey (so post-repair
+#     UKIs continue to verify under the same firmware enrollment)
 #
 # Use when:
 #   - bootloader / ESP got wiped (Windows install, NVRAM nuked)
 #   - kernel/initramfs format change makes bootc upgrade impossible
-#     (e.g. switching to a UKI image)
 #   - ostree repo got corrupted
 #
-# Works on btrfs / ext4 / xfs root filesystems. The wipe-keep-/var
-# logic is filesystem-agnostic. On btrfs with the cache22-install
-# subvolume layout, /var/home gets the extra safety of being its own
-# subvolume.
+# Works on btrfs / ext4 / xfs root filesystems.
 
 set -uo pipefail
 
@@ -25,18 +22,15 @@ DEFAULT_IMAGE_BASE="ghcr.io/cmspam/cache22-"
 DEFAULT_IMAGE_TAG="rolling"
 TARGET=/var/mnt/target
 LOG=/var/log/cache22-repair.log
-MOK_PASSWORD="cache22sb"
 
 declare -A CFG=(
     [disk]=""
     [esp_part]=""
-    [boot_part]=""
     [root_part]=""
     [scratch_part]=""
     [luks]="no"
     [luks_password]=""
     [image]=""
-    [enroll_mok]="ask"
 )
 
 # ─── UI helpers ────────────────────────────────────────────────────────
@@ -74,7 +68,7 @@ require_root() {
 }
 
 require_tools() {
-    local need=(podman bootc mokutil efibootmgr blkid btrfs cryptsetup mountpoint)
+    local need=(podman bootc sbctl ukify bootctl efibootmgr blkid btrfs cryptsetup mountpoint)
     local missing=()
     for t in "${need[@]}"; do command -v "$t" >/dev/null 2>&1 || missing+=("$t"); done
     [[ ${#missing[@]} -gt 0 ]] && die "Missing required tools: ${missing[*]}"
@@ -131,7 +125,7 @@ detect_install() {
         ROOT_DEV="$part"
     fi
 
-    # Find /boot and ESP from the same parent disk.
+    # Find ESP from the same parent disk.
     local pkname
     pkname=$(lsblk -no PKNAME "${CFG[root_part]}" | head -1)
     [[ -n "$pkname" ]] || die "Could not derive parent disk from ${CFG[root_part]}"
@@ -143,13 +137,11 @@ detect_install() {
         lbl=$(blkid -s LABEL -o value "$p" 2>/dev/null || echo "")
         case "$lbl" in
             EFI-SYSTEM)      CFG[esp_part]="$p" ;;
-            boot)            CFG[boot_part]="$p" ;;
             cache22-scratch) CFG[scratch_part]="$p" ;;
         esac
     done
 
     [[ -n "${CFG[esp_part]}"  ]] || die "ESP partition (label EFI-SYSTEM) not found on ${CFG[disk]}"
-    [[ -n "${CFG[boot_part]}" ]] || die "Boot partition (label 'boot') not found on ${CFG[disk]}"
 
     # Detect the inner filesystem (after LUKS unlock if applicable).
     FS_KIND=$(blkid -s TYPE -o value "$ROOT_DEV" 2>/dev/null || echo "")
@@ -181,7 +173,6 @@ detect_install() {
 
     say "  Disk:      ${CFG[disk]}"
     say "  ESP:       ${CFG[esp_part]}"
-    say "  Boot:      ${CFG[boot_part]}"
     say "  Root:      ${CFG[root_part]}  ($([[ "${CFG[luks]}" == "yes" ]] && echo "LUKS-encrypted, " || echo "")$FS_KIND$([[ "$HAS_SUBVOLS" -eq 1 ]] && echo " + root/home subvols"))"
     say "  Scratch:   ${CFG[scratch_part]:-<none, will use tmpfs>}"
 }
@@ -287,8 +278,6 @@ wipe_image_content() {
     umount "$probe"
     rmdir "$probe"
 
-    say "  Wiping /boot partition"
-    mkfs.ext4 -F -q -L boot "${CFG[boot_part]}"
     say "  Wiping ESP"
     mkfs.fat -F32 -n EFI-SYSTEM "${CFG[esp_part]}" >/dev/null
 }
@@ -305,12 +294,9 @@ setup_mounts() {
         mount "$ROOT_DEV" "$TARGET"
     fi
     mount --make-rshared "$TARGET" || true
-    mkdir -p "$TARGET/boot"
-    mount -t ext4 "${CFG[boot_part]}" "$TARGET/boot"
-    mount --make-rshared "$TARGET/boot" || true
-    mkdir -p "$TARGET/boot/efi"
-    mount "${CFG[esp_part]}" "$TARGET/boot/efi"
-    mount --make-rshared "$TARGET/boot/efi" || true
+    mkdir -p "$TARGET/boot" "$TARGET/efi"
+    mount "${CFG[esp_part]}" "$TARGET/efi"
+    mount --make-rshared "$TARGET/efi" || true
 }
 
 setup_scratch() {
@@ -333,24 +319,8 @@ run_bootc() {
     say "Pulling ${CFG[image]}"
     podman pull "${CFG[image]}"
 
-    local ROOT_UUID BOOT_UUID
+    local ROOT_UUID
     ROOT_UUID=$(blkid -s UUID -o value "$ROOT_DEV")
-    BOOT_UUID=$(blkid -s UUID -o value "${CFG[boot_part]}")
-
-    local LUKS_KARGS=()
-    if [[ "${CFG[luks]}" == "yes" ]]; then
-        local LUKS_PART_UUID
-        LUKS_PART_UUID=$(blkid -s UUID -o value "${CFG[root_part]}")
-        LUKS_KARGS=(
-            --karg="rd.luks.uuid=$LUKS_PART_UUID"
-            --karg="rd.luks.name=$LUKS_PART_UUID=cache22-root"
-            --karg="rd.luks.options=$LUKS_PART_UUID=discard,tpm2-device=auto"
-        )
-    fi
-    local FS_KARGS=()
-    if [[ "$FS_KIND" == "btrfs" && "$HAS_SUBVOLS" -eq 1 ]]; then
-        FS_KARGS=( --karg="rootflags=subvol=root,$BTRFS_OPTS" )
-    fi
 
     podman run --rm --privileged --pid=host \
         --mount "type=bind,src=$TARGET,dst=/target,bind-propagation=rshared" \
@@ -364,10 +334,7 @@ run_bootc() {
             --target-no-signature-verification \
             --generic-image \
             --stateroot default \
-            --bootloader=grub \
-            --karg="root=UUID=$ROOT_UUID" \
-            "${LUKS_KARGS[@]}" \
-            "${FS_KARGS[@]}" \
+            --bootloader=none \
             --root-mount-spec="UUID=$ROOT_UUID" \
             --skip-finalize \
             /target \
@@ -397,15 +364,13 @@ restore_etc_state() {
     say "  Overlaying $ETC_SNAPSHOT onto $DEPLOY_ETC (full /etc preserved)"
     cp -a "$ETC_SNAPSHOT"/. "$DEPLOY_ETC/"
 
-    local ROOT_UUID BOOT_UUID ESP_UUID
+    local ROOT_UUID ESP_UUID
     ROOT_UUID=$(blkid -s UUID -o value "$ROOT_DEV")
-    BOOT_UUID=$(blkid -s UUID -o value "${CFG[boot_part]}")
     ESP_UUID=$(blkid -s UUID -o value "${CFG[esp_part]}")
 
     say "  Regenerating /etc/fstab from current install state"
     {
-        echo "UUID=$BOOT_UUID  /boot      ext4  defaults              0 2"
-        echo "UUID=$ESP_UUID   /boot/efi  vfat  umask=0077,shortname=winnt  0 2"
+        echo "UUID=$ESP_UUID   /efi  vfat  umask=0077,shortname=winnt  0 2"
         if [[ "$FS_KIND" == "btrfs" && "$HAS_SUBVOLS" -eq 1 ]]; then
             echo "UUID=$ROOT_UUID  /var/home  btrfs  subvol=home,$BTRFS_OPTS  0 0"
         fi
@@ -416,72 +381,74 @@ restore_etc_state() {
         LUKS_PART_UUID=$(blkid -s UUID -o value "${CFG[root_part]}")
         say "  Regenerating /etc/crypttab"
         echo "cache22-root UUID=$LUKS_PART_UUID none luks,discard" > "$DEPLOY_ETC/crypttab"
-
-        # Patch BLS entry with rd.luks kargs (bootc --karg drops them).
-        local LUKS_OPTS="rd.luks.uuid=$LUKS_PART_UUID rd.luks.name=$LUKS_PART_UUID=cache22-root rd.luks.options=$LUKS_PART_UUID=discard"
-        shopt -s nullglob
-        for entry in "$TARGET"/boot/loader/entries/*.conf "$TARGET"/boot/efi/loader/entries/*.conf; do
-            grep -q 'rd\.luks\.uuid=' "$entry" || sed -i "/^options /s| *\$| $LUKS_OPTS|" "$entry"
-        done
-        shopt -u nullglob
-    fi
-}
-
-reinstall_esp_extras() {
-    banner "Reinstalling cache22 ESP extras (cert + MokManager fallback)"
-    local ESP="$TARGET/boot/efi"
-    install -d -m0755 "$ESP/EFI/BOOT"
-
-    local DEPLOY_ROOT; DEPLOY_ROOT=$(dirname "$(deploy_etc)")
-    local CERT_SRC="$DEPLOY_ROOT/usr/share/cache22/secureboot.cer"
-    [[ -f "$CERT_SRC" ]] || die "Missing $CERT_SRC in new deploy"
-    install -m0644 "$CERT_SRC" "$ESP/EFI/BOOT/sbcert.der"
-
-    [[ -f "$ESP/EFI/cache22/mmx64.efi" ]] && \
-        install -m0644 "$ESP/EFI/cache22/mmx64.efi" "$ESP/EFI/BOOT/mmx64.efi"
-
-    if command -v efibootmgr >/dev/null 2>&1 && [[ -d /sys/firmware/efi/efivars ]]; then
-        # Drop any stale cache22 entries first; bootupd may not have rerun.
-        local bootnum
-        while IFS= read -r bootnum; do
-            efibootmgr -b "$bootnum" -B >/dev/null 2>&1 || true
-        done < <(efibootmgr 2>/dev/null | awk '/cache22/{sub("Boot",""); sub("\\*?","",$1); print substr($1,1,4)}')
-        efibootmgr --create --disk "${CFG[disk]}" --part 1 \
-            --label "cache22" \
-            --loader "\\EFI\\cache22\\shimx64.efi" \
-            2>&1 | sed 's/^/    /' || \
-            say "  WARNING: efibootmgr --create failed"
     fi
 
-    [[ -e "$TARGET/boot/boot" ]] || ln -s . "$TARGET/boot/boot"
-}
-
-maybe_enroll_mok() {
-    banner "MOK enrollment"
-    if [[ "${CFG[enroll_mok]}" == "no" ]]; then
-        say "  Skipping (--no-mok)."
-        return 0
-    fi
-    if [[ "${CFG[enroll_mok]}" == "ask" ]]; then
-        say "If the MOK key for cache22 is already enrolled in this firmware,"
-        say "kernels signed with it will keep working — no re-enroll needed."
-        say "If you wiped the firmware NVRAM or installed on new hardware,"
-        say "queue a fresh MOK enrollment now."
-        if ! confirm "Queue MOK enrollment on next boot?" "no"; then
-            say "  Skipped."
-            return 0
+    # Per-machine kargs: rebuild from current disk UUIDs. resign-uki
+    # bakes them into the UKI's .cmdline at next run.
+    install -d "$DEPLOY_ETC/cache22"
+    {
+        echo "# Per-machine kargs (regenerated by cache22-repair)."
+        echo "root=UUID=$ROOT_UUID"
+        if [[ "${CFG[luks]}" == "yes" ]]; then
+            local LUKS_PART_UUID
+            LUKS_PART_UUID=$(blkid -s UUID -o value "${CFG[root_part]}")
+            echo "rd.luks.uuid=$LUKS_PART_UUID"
+            echo "rd.luks.name=$LUKS_PART_UUID=cache22-root"
+            echo "rd.luks.options=$LUKS_PART_UUID=discard,tpm2-device=auto"
         fi
+        if [[ "$FS_KIND" == "btrfs" && "$HAS_SUBVOLS" -eq 1 ]]; then
+            echo "rootflags=subvol=root,$BTRFS_OPTS"
+        fi
+    } > "$DEPLOY_ETC/cache22/extra-cmdline"
+}
+
+install_sb_and_uki() {
+    banner "Reinstalling sd-boot + signing first UKI"
+    local DEPLOY_ETC; DEPLOY_ETC=$(deploy_etc)
+    local DEPLOY_ROOT; DEPLOY_ROOT=$(dirname "$DEPLOY_ETC")
+    local ESP="$TARGET/efi"
+
+    # Preserve the per-machine SB key from the live system if it
+    # exists — the firmware DB enrollment is bound to it. cache22-
+    # repair runs from the running cache22 install, so /var/lib/
+    # cache22/sbkey is on the same disk we just redeployed.
+    local LIVE_KEYS=/var/lib/cache22/sbkey
+    if [[ -d "$LIVE_KEYS" ]] && [[ -f "$LIVE_KEYS/keys/db/db.key" ]]; then
+        say "  Preserving existing SB key at $LIVE_KEYS"
+        install -d -m 0700 "$DEPLOY_ROOT/var/lib/cache22"
+        cp -a "$LIVE_KEYS" "$DEPLOY_ROOT/var/lib/cache22/sbkey"
     fi
-    local CERT_DER
-    CERT_DER="$(dirname "$(deploy_etc)")/usr/share/cache22/secureboot.cer"
-    [[ -f "$CERT_DER" ]] || die "Missing $CERT_DER"
-    if printf '%s\n%s\n' "$MOK_PASSWORD" "$MOK_PASSWORD" \
-            | mokutil --import "$CERT_DER" 2>&1 | sed 's/^/    /'; then
-        say "  MOK enrollment queued. MokManager password: $MOK_PASSWORD"
-    else
-        say "  WARNING: mokutil --import failed; user can enroll manually"
-        say "  from /EFI/BOOT/sbcert.der at the MokManager prompt."
-    fi
+
+    install -d "$DEPLOY_ROOT/sys/firmware/efi/efivars" "$DEPLOY_ROOT/dev" "$DEPLOY_ROOT/proc" "$DEPLOY_ROOT/sys" "$DEPLOY_ROOT/efi"
+    mount --bind /sys/firmware/efi/efivars "$DEPLOY_ROOT/sys/firmware/efi/efivars" 2>/dev/null || true
+    mount --bind /dev "$DEPLOY_ROOT/dev" 2>/dev/null || true
+    mount -t proc proc "$DEPLOY_ROOT/proc" 2>/dev/null || true
+    mount --bind /sys "$DEPLOY_ROOT/sys" 2>/dev/null || true
+    mount --bind "$ESP" "$DEPLOY_ROOT/efi" 2>/dev/null || true
+
+    chroot "$DEPLOY_ROOT" /usr/libexec/cache22/sb-key-init
+    chroot "$DEPLOY_ROOT" sbctl enroll-keys --microsoft --export auth || \
+        say "  WARN: sbctl enroll-keys --export auth failed"
+    chroot "$DEPLOY_ROOT" bootctl install --esp-path=/efi || \
+        die "bootctl install failed"
+
+    install -d "$ESP/loader"
+    cat > "$ESP/loader/loader.conf" <<EOF
+default      cache22-*.efi
+timeout      3
+console-mode keep
+editor       no
+secure-boot-enroll force
+EOF
+
+    chroot "$DEPLOY_ROOT" /usr/libexec/cache22/resign-uki || \
+        die "first UKI build failed"
+
+    umount "$DEPLOY_ROOT/efi" 2>/dev/null || true
+    umount "$DEPLOY_ROOT/sys" 2>/dev/null || true
+    umount "$DEPLOY_ROOT/proc" 2>/dev/null || true
+    umount "$DEPLOY_ROOT/dev" 2>/dev/null || true
+    umount "$DEPLOY_ROOT/sys/firmware/efi/efivars" 2>/dev/null || true
 }
 
 cleanup_mounts() {
@@ -502,15 +469,15 @@ cache22-repair — reinstall the cache22 OS image without deleting
 
 Usage:
   cache22-repair                  interactive
-  cache22-repair --no-mok         skip MOK enrollment prompt
   cache22-repair --image REF      override the ghcr.io image to deploy
 
 What it does:
-  Wipes only the OS-image bits — ostree repo, deploy commits, /boot
-  kernel/initramfs, ESP bootloader — and reinstalls them from the
-  cache22 image on ghcr.io. Keeps /var (so /home, /var/log, /var/lib,
-  /var/usrlocal, /root) and /etc (user accounts, hostname, NM
-  connections, sudoers, SSH host keys, anything else you added).
+  Wipes only the OS-image bits — ostree repo, deploy commits, ESP
+  bootloader + UKIs — and reinstalls them from the cache22 image on
+  ghcr.io. Keeps /var (so /home, /var/log, /var/lib, /var/usrlocal,
+  /root), /etc (user accounts, hostname, NM connections, sudoers,
+  SSH host keys), and /var/lib/cache22/sbkey (the per-machine SB key
+  bound to firmware DB enrollment).
 
   /etc/fstab and /etc/crypttab are regenerated to match the current
   partition layout. Everything else in /etc is preserved verbatim.
@@ -530,7 +497,6 @@ main() {
     [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]] && usage
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --no-mok)   CFG[enroll_mok]="no"; shift ;;
             --image)    CFG[image]="$2"; shift 2 ;;
             -h|--help)  usage ;;
             *)          die "Unknown arg: $1" ;;
@@ -547,13 +513,13 @@ main() {
     say ""
     say "Plan:"
     say "  WIPE (image content):"
-    say "    ${CFG[esp_part]}  (ESP — bootloader)"
-    say "    ${CFG[boot_part]}  (/boot — kernel/initramfs/BLS)"
+    say "    ${CFG[esp_part]}  (ESP — sd-boot + UKIs)"
     say "    /sysroot/ostree/repo + per-deploy commits on ${CFG[root_part]}"
     say "  KEEP (user state):"
     say "    /sysroot/ostree/deploy/<sr>/var (→ /home, /var/*, /root, /usr/local)"
     say "    full /etc (user accounts, hostname, NM, SSH host keys, …)"
-    say "    NOTE: /etc/fstab + /etc/crypttab regenerated to match current disk"
+    say "    /var/lib/cache22/sbkey (per-machine SB key)"
+    say "    NOTE: /etc/fstab + /etc/crypttab + extra-cmdline regenerated"
     say "  REDEPLOY: ${CFG[image]}"
     say ""
     confirm "Proceed?" "no" || die "Aborted by user."
@@ -565,13 +531,10 @@ main() {
     setup_scratch
     run_bootc
     restore_etc_state
-    reinstall_esp_extras
-    maybe_enroll_mok
+    install_sb_and_uki
 
     banner "Repair complete"
     say "Reboot to enter the new deployment."
-    say "If MOK was enrolled, MokManager will run on next boot — password:"
-    say "  $MOK_PASSWORD"
 }
 
 main "$@"

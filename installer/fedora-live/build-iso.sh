@@ -7,14 +7,14 @@
 #
 # Pipeline:
 #   1. dnf --installroot=/rootfs install <minimal Fedora 44 packages>
-#   2. Copy cache22-install + variants.json + sbcert.der into rootfs
+#   2. Copy cache22-install + variants.json into rootfs
 #   3. Configure autologin tty1 → cache22-install
 #   4. Aggressive Fedora→cache22 branding (os-release, issue, motd,
 #      hostname, gettys, plymouth disabled, grub menu titles)
 #   5. Strip caches, mksquashfs the rootfs → squashfs.img
 #   6. dracut --add dmsquash-live in chroot → initramfs
 #   7. Pull vmlinuz / shim / grub2 / mokmanager out of rootfs
-#   8. Build EFI boot image (FAT) with shim + grub2 + sbcert.der
+#   8. Build EFI boot image (FAT) with shim + grub2
 #   9. xorrisofs the whole thing into a hybrid ISO
 #
 # Must run as root. On Fedora 44 (host or container).
@@ -39,17 +39,6 @@ for tool in dnf dracut mksquashfs xorriso mkfs.fat mcopy mmd python3; do
         || { echo "ERROR: missing $tool"; exit 1; }
 done
 
-# ─── Stage cert ───────────────────────────────────────────────────
-mkdir -p "$WORK"
-CERT_DER="$WORK/sbcert.der"
-if [[ -f "$REPO/secureboot.crt" ]]; then
-    openssl x509 -in "$REPO/secureboot.crt" -outform DER -out "$CERT_DER"
-else
-    echo "WARN: $REPO/secureboot.crt missing — sbcert.der will be empty;"
-    echo "      users won't have a manual MokManager fallback."
-    : > "$CERT_DER"
-fi
-
 # ─── 1. Bootstrap minimal Fedora 44 rootfs ────────────────────────
 echo "==> Bootstrapping Fedora 44 rootfs at $ROOTFS"
 rm -rf "$ROOTFS"; mkdir -p "$ROOTFS"
@@ -58,12 +47,16 @@ rm -rf "$ROOTFS"; mkdir -p "$ROOTFS"
 # @core (drags in plymouth, fwupd, firewalld, sssd, audit, etc. that
 # we don't use). Audio/print/scan stack stays out.
 PKGS=(
-    # Boot chain (signed by Fedora SB CA → trusted via shim's vendor_cert)
-    # kernel-modules-extra gets us iwlwifi/rtw88/ath10k for the wifi
-    # drivers we --add-drivers in the dracut step.
+    # Boot chain for the live ISO itself (Fedora's MS-signed shim +
+    # signed grub2 so the live env boots under stock SB on factory
+    # firmware). The installed system uses sd-boot + UKI instead;
+    # the live env's bootloader is not what gets installed.
     kernel-core kernel-modules-core kernel-modules-extra
     shim-x64 grub2-efi-x64 grub2-tools-minimal
-    efibootmgr mokutil sbsigntools
+    efibootmgr sbsigntools
+    # cache22-install needs sbctl + ukify + bootctl on the live env
+    # to set up sd-boot + UKI on the target.
+    sbctl systemd-boot-unsigned
     # Initramfs + live-media support (dmsquash-live = mount squashfs from CD)
     dracut dracut-live dracut-network dracut-config-generic
     # Firmware: linux-firmware covers most modern wifi/wired; specific
@@ -350,7 +343,6 @@ cp "$WORK/boot/initramfs.img"  "$ISOROOT/images/initramfs.img"
 cp "$WORK/boot/shimx64.efi"    "$ISOROOT/EFI/BOOT/BOOTX64.EFI"
 cp "$WORK/boot/grubx64.efi"    "$ISOROOT/EFI/BOOT/grubx64.efi"
 cp "$WORK/boot/mmx64.efi"      "$ISOROOT/EFI/BOOT/mmx64.efi"
-cp "$CERT_DER"                 "$ISOROOT/EFI/BOOT/sbcert.der"
 
 # Live boot menu — referenced by Fedora grub2 via $prefix=/EFI/fedora.
 # Critical: $root starts as the ESP (where shim/grub live). The kernel
