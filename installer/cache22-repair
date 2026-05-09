@@ -68,7 +68,7 @@ require_root() {
 }
 
 require_tools() {
-    local need=(podman bootc sbctl ukify bootctl efibootmgr blkid btrfs cryptsetup mountpoint)
+    local need=(podman bootc efibootmgr blkid btrfs cryptsetup mountpoint)
     local missing=()
     for t in "${need[@]}"; do command -v "$t" >/dev/null 2>&1 || missing+=("$t"); done
     [[ ${#missing[@]} -gt 0 ]] && die "Missing required tools: ${missing[*]}"

@@ -682,7 +682,7 @@ needs_wizard() {
 # (openssl missing → empty password hash → passwordless account).
 # Refuse to start if anything's missing.
 require_tools() {
-    local need=(openssl podman bootc sbctl ukify bootctl efibootmgr mkfs.fat mkfs.ext4 mkfs.btrfs btrfs sgdisk parted blkid mountpoint dmsetup pvs vgchange mdadm wipefs lsblk udevadm)
+    local need=(openssl podman bootc efibootmgr mkfs.fat mkfs.ext4 mkfs.btrfs btrfs sgdisk parted blkid mountpoint dmsetup pvs vgchange mdadm wipefs lsblk udevadm)
     local missing=()
     local t
     for t in "${need[@]}"; do

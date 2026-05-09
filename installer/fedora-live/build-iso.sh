@@ -50,13 +50,11 @@ PKGS=(
     # Boot chain for the live ISO itself (Fedora's MS-signed shim +
     # signed grub2 so the live env boots under stock SB on factory
     # firmware). The installed system uses sd-boot + UKI instead;
-    # the live env's bootloader is not what gets installed.
+    # cache22-install runs sbctl/bootctl/ukify inside a chroot of the
+    # deployed cache22 rootfs, so the live env doesn't need them.
     kernel-core kernel-modules-core kernel-modules-extra
     shim-x64 grub2-efi-x64 grub2-tools-minimal
-    efibootmgr sbsigntools
-    # cache22-install needs sbctl + ukify + bootctl on the live env
-    # to set up sd-boot + UKI on the target.
-    sbctl systemd-boot-unsigned
+    efibootmgr
     # Initramfs + live-media support (dmsquash-live = mount squashfs from CD)
     dracut dracut-live dracut-network dracut-config-generic
     # Firmware: linux-firmware covers most modern wifi/wired; specific
