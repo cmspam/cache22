@@ -16,23 +16,6 @@ ARG BASE_TAG=latest
 #   if not set explicitly; pinning eliminates that source of variance
 ARG SOURCE_DATE_EPOCH=0
 
-# ─── Stage 0: fedora-bootloader ───────────────────────────────────
-# Pull Fedora's MS-signed shim + Fedora-CA-signed grub2 from the
-# current stable Fedora release. dnf handles version resolution,
-# dependencies, and GPG verification — no URL hardcoding. The vendor
-# subdir gets renamed from EFI/fedora to EFI/cache22 so bootupd's
-# auto-detection picks "cache22" as our vendor at runtime.
-FROM registry.fedoraproject.org/fedora:latest AS fedora-bootloader
-RUN dnf install -y \
-        --setopt=install_weak_deps=False \
-        --setopt=tsflags=nodocs \
-        shim-x64 grub2-efi-x64 \
- && for d in /usr/lib/efi/shim/*/EFI/fedora /usr/lib/efi/grub2/*/EFI/fedora; do \
-        [ -d "$d" ] || continue; \
-        mv "$d" "$(dirname "$d")/cache22"; \
-    done \
- && find /usr/lib/efi -mindepth 1 -maxdepth 5 -print
-
 # ─── Stage: libfaketime (tiny, just installs libfaketime so other ─
 # stages can COPY /usr/bin/faketime + /usr/lib/faketime out). Used
 # downstream to wrap dkms (alpm-hook-triggered module compiles) and
@@ -165,17 +148,8 @@ RUN install -d /usr/local/bin \
         > /usr/local/bin/dkms \
  && chmod +x /usr/local/bin/dkms
 
-# sed strips inline comments + blank lines (so commented package lines
-# don't pass through as bogus pkg names). Retry 5x: cachy/ALHP CDN
-# sometimes serves a stale 404 while a new pkg propagates.
-#
-# --mount=type=secret,id=sbkey passes the cache22 SB private key into
-# this RUN so DKMS hooks (fired by pacman for *-dkms packages) can sign
-# the modules they build. /etc/dkms/framework.conf points them at this
-# key path; modules get signed with the cache22 SB cert, MOK-trusted at
-# boot, byte-stable across rebuilds.
-RUN --mount=type=secret,id=sbkey,target=/run/secrets/sbkey,required=false \
-    pkglist=$(sed -e 's/[[:space:]]*#.*$//' -e '/^[[:space:]]*$/d' \
+# Strip comments + blanks; retry up to 5x for transient mirror 404s.
+RUN pkglist=$(sed -e 's/[[:space:]]*#.*$//' -e '/^[[:space:]]*$/d' \
         "/tmp/cache22-build/packages/${VARIANT_FAMILY}-common.txt" \
         "/tmp/cache22-build/packages/${VARIANT}.txt") \
  && for attempt in 1 2 3 4 5; do \
@@ -203,24 +177,10 @@ RUN cp -av --remove-destination /tmp/cache22-build/system_files/common/. / \
 RUN /tmp/cache22-build/scripts/patch-ostree-dracut.sh
 RUN /tmp/cache22-build/scripts/generate-initramfs.sh
 
-# Boot chain. See docs/SECUREBOOT.md.
-# Pull Fedora's signed shim + grub2 from the fedora-bootloader stage.
-# Vendor was renamed to "cache22" so bootupd's auto-detection picks
-# our vendor name. Then have bootupd emit /usr/lib/bootupd/updates/
-# EFI.json + payload tree so `bootupctl install/update/adopt` can
-# operate on the deployed system.
-COPY --from=fedora-bootloader /usr/lib/efi/  /usr/lib/efi/
-# Build the bootupd payload tree + EFI.json manually. bootupd's own
-# generate-update-metadata shells out to `rpm -q` for version info,
-# which doesn't work on a pacman-based image. See script header.
-RUN /tmp/cache22-build/scripts/generate-bootupd-metadata.sh
-# Emit secureboot.cer (DER) for the installer to feed to mokutil --import.
-RUN /tmp/cache22-build/scripts/build-sb-enrollment.sh
-# sbsign each /usr/lib/modules/*/vmlinuz with the cache22 SB key so
-# grub's shim_lock verifier accepts it once the user enrolls our cert
-# in MOK on first boot.
-RUN --mount=type=secret,id=sbkey,target=/run/secrets/sbkey,required=false \
-    /tmp/cache22-build/scripts/sign-secureboot.sh
+# No SB signing or bootloader binaries shipped — sd-boot + UKI are
+# assembled and signed at install / bootc-upgrade time by
+# /usr/libexec/cache22/resign-uki against the per-machine sbctl key.
+# See docs/SECUREBOOT.md.
 
 RUN VARIANT=${VARIANT} /tmp/cache22-build/scripts/finalize-image.sh
 
@@ -232,5 +192,3 @@ RUN bootc container lint
 # variants and arch-server skip the inject entirely).
 RUN sed -i '/^\[cache22-aur\]/,/^$/d' /etc/pacman.conf \
  && rm -rf /tmp/cache22-build /var/cache/pacman/cache22-aur
-
-

@@ -67,23 +67,17 @@ vdpauinfo
 gst-plugin-va
 
 # ─── bootc + immutable infrastructure ─────────────────────
-# bootc + bootupd both come from cmspam/bootc-v3 (built for x86-64-v3
-# baseline so they don't SIGILL on Intel CPUs). bootupd manages the
-# ESP bootloader (shim/grub2) for atomic updates on `bootc upgrade`.
 bootc
-bootupd
 dracut
 ostree
 composefs
 skopeo
 
-# ─── Bootloader + boot tooling ────────────────────────────
-# grub: installer uses grub-editenv to create /boot/grub/grubenv.
-# The on-ESP grub binary is Fedora's signed grub2 (fetched at image
-# build time by fetch-fedora-bootloader.sh), NOT this Arch grub.
-grub
+# ─── Bootloader + UKI ─────────────────────────────────────
 efibootmgr
-os-prober
+sbctl
+sbsigntools
+systemd-ukify
 
 # Wraps signing tools (sbsign, dracut) at build time so embedded
 # wall-clock timestamps become deterministic. Tiny library, harmless
@@ -105,7 +99,6 @@ nfs-utils
 samba
 smbclient
 smartmontools
-efitools
 
 # ─── Network ──────────────────────────────────────────────
 networkmanager
@@ -239,10 +232,6 @@ mtr
 sysstat
 inxi
 
-# ─── Secure Boot tooling ──────────────────────────────────
-sbctl
-mokutil
-sbsigntools
-systemd-ukify
+# ─── TPM2 ─────────────────────────────────────────────────
 tpm2-tools
 tpm2-tss

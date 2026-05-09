@@ -38,12 +38,19 @@ enable fstrim.timer
 # Container infra
 enable podman.socket
 
-# bootupd: refresh ESP shim/grub on each boot. Idempotent (no-op when
-# /usr/lib/efi version matches what's on the ESP). Whenever a `bootc
-# upgrade` lands a new image with newer Fedora bootloader binaries,
-# the next reboot copies them onto the ESP automatically — no
-# separate command needed. Same pattern Fedora bootc uses.
-enable bootloader-update.service
+# cache22-resign-uki: rebuild + sign + place the per-deploy UKI on the
+# ESP whenever bootc state changes (upgrade, switch, rollback, edit).
+# Path watchers fire on /ostree/bootc mtime (bootc bumps it on every
+# state-changing op via bootc-status-updated.path) and on
+# /etc/cache22/extra-cmdline edits (so cache22-karg changes trigger a
+# rebuild even without a bootc upgrade).
+enable cache22-resign-uki.path
+
+# Mask systemd-boot-update.service: it would copy the unsigned sd-boot
+# binary from /usr/lib/systemd/boot/efi/ over our locally-signed copy
+# on the ESP. cache22-resign-uki re-signs sd-boot itself when the in-
+# image version is newer than the ESP version.
+disable systemd-boot-update.service
 
 # Post-boot health checks; auto-rollback after 3 consecutive failed boots.
 # Triggered by a 2-min OnBootSec timer (NOT WantedBy=multi-user.target —
