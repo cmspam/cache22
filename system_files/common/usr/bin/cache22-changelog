@@ -85,10 +85,18 @@ staged_root="$stateroot_dir/$staged_id"
 
 # Both deployments use /usr/lib/sysimage/pacman/local/ (relocated from
 # /var/lib/pacman by rewrite-pacman-paths.sh at image-build time). Each
-# subdir is named pkgname-version-release. Parse those.
+# subdir is named pkgname-version-release. pkgname may contain hyphens;
+# pkgrel may contain dots (CachyOS uses 1.1, 2.3 freely). Split on the
+# last two hyphens so both quirks survive.
 list_pkgs() {
     local root="$1"
-    ls "$root/usr/lib/sysimage/pacman/local/" 2>/dev/null | sed -E 's/^([^[:space:]]+)-([0-9][^-]*-[0-9]+)$/\1\t\2/'
+    ls "$root/usr/lib/sysimage/pacman/local/" 2>/dev/null \
+        | grep -v '^ALPM_DB_VERSION$' \
+        | awk -F'-' 'NF>=3 {
+            rel=$NF; ver=$(NF-1); name=$1;
+            for (i=2; i<=NF-2; i++) name=name "-" $i;
+            print name "\t" ver "-" rel
+        }'
 }
 
 booted_pkgs=$(list_pkgs "$booted_root" | sort)

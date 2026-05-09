@@ -148,11 +148,56 @@ jobs:
               || true
           echo "==> Generated tmpfiles.d entries: $(grep -cv '^#' /tmp/diagnostics/00-cache22-var-${{ matrix.variant }}.conf || true)"
           echo "==> Factory-var files: $(wc -l < /tmp/diagnostics/factory-var-${{ matrix.variant }}.list 2>/dev/null || echo 0)"
-          # Snapshot the installed package set (pkgname-version-release)
-          # for cross-build diffing. Same source as cache22-changelog.
-          sudo ls "$mnt/usr/lib/sysimage/pacman/local/" 2>/dev/null \
-              | grep -v '^ALPM_DB_VERSION$' | sort \
-              > "/tmp/diagnostics/pkgs-${{ matrix.variant }}.txt"
+          # Snapshot the installed package set for cross-build diffing.
+          # Two outputs from one walk of the pacman db:
+          #   pkgs-<variant>.txt           — sorted dir names (used by
+          #                                  no-changes detector via cmp)
+          #   pkgs-detailed-<variant>.tsv  — name, ver, rel, epoch, size
+          #                                  parsed from each desc file
+          #                                  (used by package-diff step
+          #                                  to report size deltas and
+          #                                  distinguish ver vs rel bumps)
+          sudo python3 - "$mnt/usr/lib/sysimage/pacman/local" \
+                          "/tmp/diagnostics/pkgs-${{ matrix.variant }}.txt" \
+                          "/tmp/diagnostics/pkgs-detailed-${{ matrix.variant }}.tsv" <<'PY'
+          import os, sys
+          db, simple_out, tsv_out = sys.argv[1], sys.argv[2], sys.argv[3]
+          rows = []
+          for entry in sorted(os.listdir(db)):
+              if entry == 'ALPM_DB_VERSION':
+                  continue
+              desc = os.path.join(db, entry, 'desc')
+              if not os.path.isfile(desc):
+                  continue
+              fields = {}
+              key = None
+              with open(desc, encoding='utf-8', errors='replace') as f:
+                  for line in f:
+                      line = line.rstrip('\n')
+                      if line.startswith('%') and line.endswith('%'):
+                          key = line[1:-1]; fields[key] = []
+                      elif key is not None and line != '':
+                          fields[key].append(line)
+              name = (fields.get('NAME') or [''])[0]
+              ver_full = (fields.get('VERSION') or [''])[0]   # may be EPOCH:VER-REL
+              size = (fields.get('SIZE') or ['0'])[0]
+              if ':' in ver_full:
+                  epoch, vr = ver_full.split(':', 1)
+              else:
+                  epoch, vr = '0', ver_full
+              if '-' in vr:
+                  ver, rel = vr.rsplit('-', 1)
+              else:
+                  ver, rel = vr, ''
+              rows.append((entry, name, ver, rel, epoch, size))
+          with open(simple_out, 'w') as f:
+              for r in rows:
+                  f.write(r[0] + '\n')
+          with open(tsv_out, 'w') as f:
+              f.write('name\tver\trel\tepoch\tsize\n')
+              for _, name, ver, rel, epoch, size in rows:
+                  f.write(f'{name}\t{ver}\t{rel}\t{epoch}\t{size}\n')
+          PY
           echo "==> Installed packages: $(wc -l < /tmp/diagnostics/pkgs-${{ matrix.variant }}.txt)"
           # Build metadata — git SHA of the source that produced this
           # image. Combined with pkgs.txt, this is what the no-changes
@@ -355,53 +400,159 @@ jobs:
       - name: Compute package diff vs previous build
         if: steps.detect.outputs.has_changes == 'true'
         run: |
-          PREV="/tmp/prev/pkgs-${{ matrix.variant }}.txt"
-          CUR="/tmp/diagnostics/pkgs-${{ matrix.variant }}.txt"
-          if [ ! -f "$PREV" ]; then
-              echo "No previous pkgs.txt — skipping changelog"
+          PREV_TSV="/tmp/prev/pkgs-detailed-${{ matrix.variant }}.tsv"
+          CUR_TSV="/tmp/diagnostics/pkgs-detailed-${{ matrix.variant }}.tsv"
+          PREV_TXT="/tmp/prev/pkgs-${{ matrix.variant }}.txt"
+          CUR_TXT="/tmp/diagnostics/pkgs-${{ matrix.variant }}.txt"
+          if [ ! -f "$PREV_TSV" ] && [ ! -f "$PREV_TXT" ]; then
+              echo "No previous package snapshot — skipping changelog"
               exit 0
           fi
-          python3 - "$PREV" "$CUR" <<'PY'
-          import os, re, sys
-          # pacman dir name format: <pkgname>-<pkgver>-<pkgrel>
-          # pkgname can contain hyphens but pkgver starts with a digit
-          # and pkgrel is always trailing -<digits>. Split from the right.
-          PKG_RE = re.compile(r'^(.+)-([^-]+-\d+)$')
-          def parse(path):
+          python3 - "$PREV_TSV" "$CUR_TSV" "$PREV_TXT" "$CUR_TXT" "${{ matrix.variant }}" <<'PY'
+          import os, sys
+          prev_tsv, cur_tsv, prev_txt, cur_txt, variant = sys.argv[1:6]
+
+          # Parse pacman db dir name: <pkgname>-<pkgver>-<pkgrel>.
+          # pkgname may contain hyphens; pkgver may not (per pacman);
+          # pkgrel may contain dots (e.g. CachyOS uses 1.1, 2.3 freely).
+          # Split from the right at the last two hyphens.
+          def parse_dirname(name):
+              parts = name.rsplit('-', 2)
+              if len(parts) != 3:
+                  return None
+              n, v, r = parts
+              # VERSION field would carry epoch as EPOCH:VER, but the dir
+              # name embeds it the same way. Strip for the epoch column.
+              if ':' in v:
+                  e, v = v.split(':', 1)
+              else:
+                  e = '0'
+              return n, v, r, e, 0  # size unknown from dir name alone
+
+          def load_tsv(path):
+              out = {}
+              with open(path) as f:
+                  next(f, None)  # header
+                  for line in f:
+                      cols = line.rstrip('\n').split('\t')
+                      if len(cols) < 5: continue
+                      name, ver, rel, epoch, size = cols[:5]
+                      out[name] = (ver, rel, epoch, int(size or 0))
+              return out
+
+          def load_txt(path):
               out = {}
               with open(path) as f:
                   for line in f:
                       line = line.strip()
                       if not line or line == 'ALPM_DB_VERSION': continue
-                      m = PKG_RE.match(line)
-                      if m: out[m.group(1)] = m.group(2)
+                      r = parse_dirname(line)
+                      if r:
+                          n, v, rel, e, sz = r
+                          out[n] = (v, rel, e, sz)
               return out
-          prev, cur = parse(sys.argv[1]), parse(sys.argv[2])
-          added    = sorted(set(cur) - set(prev))
-          removed  = sorted(set(prev) - set(cur))
-          upgraded = sorted([p for p in (set(cur) & set(prev)) if cur[p] != prev[p]])
-          variant  = "${{ matrix.variant }}"
+
+          prev = load_tsv(prev_tsv) if os.path.isfile(prev_tsv) else load_txt(prev_txt)
+          cur  = load_tsv(cur_tsv)  if os.path.isfile(cur_tsv)  else load_txt(cur_txt)
+
+          added   = sorted(set(cur) - set(prev))
+          removed = sorted(set(prev) - set(cur))
+          common  = set(cur) & set(prev)
+
+          ver_changed = []   # real version bump (pkgver or epoch differs)
+          rel_changed = []   # rebuild only (same pkgver+epoch, pkgrel differs)
+          for p in common:
+              pv, pr, pe, ps = prev[p]
+              cv, cr, ce, cs = cur[p]
+              if (pv, pe) != (cv, ce):
+                  ver_changed.append(p)
+              elif pr != cr:
+                  rel_changed.append(p)
+
+          def fmt_ver(v, r, e):
+              prefix = f'{e}:' if e and e != '0' else ''
+              return f'{prefix}{v}-{r}'
+
+          def _humansize(b):
+              s = float(abs(b))
+              for unit in ('B','KiB','MiB','GiB'):
+                  if s < 1024 or unit == 'GiB':
+                      return f'{s:.2f} {unit}'
+                  s /= 1024
+              return f'{s:.2f} GiB'
+          def fmt_size(b):
+              return ('+' if b >= 0 else '−') + _humansize(b)
+          def fmt_size_abs(b):
+              return _humansize(b)
+
+          # Sort upgrades by abs size delta (largest first) so the
+          # heavy hitters are on top — that's where layer drift comes
+          # from.
+          def size_delta(p):
+              return cur[p][3] - prev[p][3]
+          ver_changed.sort(key=lambda p: (-abs(size_delta(p)), p))
+          rel_changed.sort(key=lambda p: (-abs(size_delta(p)), p))
+
+          n_real, n_rebuild = len(ver_changed), len(rel_changed)
           lines = ['', f'## Package changes ({variant})', '']
-          if not (added or removed or upgraded):
+          if not (added or removed or ver_changed or rel_changed):
               lines.append('_No package-set changes since previous build._')
           else:
-              lines.append(f'**{len(upgraded)} upgraded, {len(added)} added, {len(removed)} removed**')
+              lines.append(
+                  f'**{n_real} upgraded, {n_rebuild} rebuilt, '
+                  f'{len(added)} added, {len(removed)} removed**'
+              )
+              total_delta = sum(size_delta(p) for p in ver_changed + rel_changed) \
+                            + sum(cur[p][3] for p in added) \
+                            - sum(prev[p][3] for p in removed)
               lines.append('')
-              if upgraded:
-                  lines.append('<details><summary>Upgraded</summary>\n')
-                  for p in upgraded:
-                      lines.append(f'- `{p}` {prev[p]} → {cur[p]}')
+              lines.append(f'Net installed-size change: **{fmt_size(total_delta)}**')
+              lines.append('')
+
+              if ver_changed:
+                  lines.append('<details open><summary>Upgraded (pkgver changed) — sorted by size delta</summary>\n')
+                  lines.append('| Δ size | package | from | to |')
+                  lines.append('|---:|---|---|---|')
+                  for p in ver_changed:
+                      pv,pr,pe,ps = prev[p]; cv,cr,ce,cs = cur[p]
+                      lines.append(
+                          f'| {fmt_size(cs - ps)} | `{p}` | '
+                          f'{fmt_ver(pv,pr,pe)} | {fmt_ver(cv,cr,ce)} |'
+                      )
                   lines.append('\n</details>')
+
+              if rel_changed:
+                  lines.append('<details><summary>Rebuilt (pkgrel only) — sorted by size delta</summary>\n')
+                  lines.append('| Δ size | package | from | to |')
+                  lines.append('|---:|---|---|---|')
+                  for p in rel_changed:
+                      pv,pr,pe,ps = prev[p]; cv,cr,ce,cs = cur[p]
+                      lines.append(
+                          f'| {fmt_size(cs - ps)} | `{p}` | '
+                          f'{fmt_ver(pv,pr,pe)} | {fmt_ver(cv,cr,ce)} |'
+                      )
+                  lines.append('\n</details>')
+
               if added:
-                  lines.append('<details><summary>Added</summary>\n')
+                  added.sort(key=lambda p: (-cur[p][3], p))
+                  lines.append('<details><summary>Added — sorted by install size</summary>\n')
+                  lines.append('| size | package | version |')
+                  lines.append('|---:|---|---|')
                   for p in added:
-                      lines.append(f'- `{p}` {cur[p]}')
+                      cv,cr,ce,cs = cur[p]
+                      lines.append(f'| {fmt_size_abs(cs)} | `{p}` | {fmt_ver(cv,cr,ce)} |')
                   lines.append('\n</details>')
+
               if removed:
-                  lines.append('<details><summary>Removed</summary>\n')
+                  removed.sort(key=lambda p: (-prev[p][3], p))
+                  lines.append('<details><summary>Removed — sorted by install size</summary>\n')
+                  lines.append('| size | package | version |')
+                  lines.append('|---:|---|---|')
                   for p in removed:
-                      lines.append(f'- `{p}` {prev[p]}')
+                      pv,pr,pe,ps = prev[p]
+                      lines.append(f'| {fmt_size_abs(ps)} | `{p}` | {fmt_ver(pv,pr,pe)} |')
                   lines.append('\n</details>')
+
           text = '\n'.join(lines) + '\n'
           print(text)
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as f:
