@@ -18,17 +18,11 @@ LTO build of CachyOS's default scheduler (BORE). Pre-built per-kernel modules (`
 
 bootc's tooling assumes dracut's hook model. mkinitcpio works for stock Arch but doesn't have ostree/composefs hooks. The CachyOS-shipped `cachyos-hooks` package contains an mkinitcpio-tied plymouth-initramfs hook which we delete during build (`scripts/finalize-image.sh`).
 
-## Bootloader: Fedora's pre-signed shim + grub, managed by bootupd
+## Bootloader: systemd-boot + signed UKI, managed by cache22-resign-uki
 
-The Containerfile uses a multi-stage build: a `fedora-bootloader` stage installs `shim-x64` and `grub2-efi-x64` from `registry.fedoraproject.org/fedora:latest`, renames `EFI/fedora` → `EFI/cache22`, and copies the result into `/usr/lib/efi/` in the main image. `scripts/generate-bootupd-metadata.sh` then hand-writes `/usr/lib/bootupd/updates/EFI.json` and the payload tree so bootupd can manage ESP updates. (`bootupd generate-update-metadata` cannot be used — it shells out to `rpm -q` for version info, which doesn't work on a pacman-based image.)
+The Containerfile ships no bootloader binaries. sd-boot comes from Arch's `systemd` package and is staged on the ESP at install time by `bootctl install`. UKIs (kernel + initramfs + cmdline + signed PCR-policy, all in one signed PE) are assembled and signed at install / `bootc upgrade` time on the user's machine by `/usr/libexec/cache22/resign-uki`, which fires automatically via `cache22-resign-uki.service` (`WantedBy=bootc-status-updated.target`). Each live ostree deploy gets one UKI at `/efi/EFI/Linux/cache22-<csum>.efi` with `.osrel VERSION_ID` set so sd-boot's auto-default picks the staged or booted deploy as intended.
 
-At install time, `bootc install --bootloader=grub` invokes `bootupctl install`, which copies shim + grub onto the ESP at `/EFI/cache22/`, writes a removable-media fallback at `/EFI/BOOT/BOOTX64.EFI`, drops static grub configs under `/boot/grub2/`, writes `/boot/grub2/bootuuid.cfg`, and runs `efibootmgr`. The installer (`install_cache22_esp_extras()`) then adds cache22-specific extras: `/EFI/BOOT/sbcert.der`, `/EFI/BOOT/mmx64.efi`, and the `/boot/boot` self-symlink. If no `cache22` efibootmgr entry exists after bootupd runs, the installer calls `efibootmgr --create` as a belt-and-braces fallback.
-
-On every boot, `bootloader-update.service` (from the `bootupd` package) runs `bootupctl update` — idempotent, no-op when the ESP already matches `/usr/lib/efi/`. When a `bootc upgrade` delivers newer Fedora bootloader binaries, the next reboot refreshes the ESP automatically.
-
-`scripts/sign-secureboot.sh` plain-`sbsign`s every kernel in `/usr/lib/modules/*/vmlinuz` with the cache22 SB key. Grub's `shim_lock` verifier asks shim to verify the kernel against the cache22 cert enrolled into MOK at install time. Trust chain ends there: initramfs and kernel modules load without further verification. Threat model: write access to `/boot` is already game over.
-
-Grub (not systemd-boot) because grub bundles its own ext4 driver and reads `/boot` directly — sd-boot only reads FAT, which would require duplicating every kernel onto the ESP. With grub, kernels live in exactly one place (`/boot/ostree/<deploy>/`), managed by ostree/bootc.
+Kernel + initramfs + cmdline are a single signed artifact. sd-stub ignores any external cmdline override under SB. There is no loader-level menu editor.
 
 ## Filesystem layout (the bootcrew pacman trick)
 
@@ -44,24 +38,24 @@ Read operations (`pacman -Q*`, `pacman -Si`, `pacman -F`) are useful and harmles
 
 Four consumed via repo-priority (placed above `[extra]` in `pacman.conf`):
 
-- `[bootc-v3]` — bootc + bootupd built for x86-64-v3 baseline from [`cmspam/bootc-v3`](https://github.com/cmspam/bootc-v3). The cachyos-v3 default RUSTFLAGS would emit AMD-only SSE4a instructions and SIGILL on Intel; this repo rebuilds with the v3 baseline.
+- `[bootc-v3]` — bootc built for the x86-64-v3 baseline from [`cmspam/bootc-v3`](https://github.com/cmspam/bootc-v3).
 - `[qemu-patched-v3]` — patched QEMU from [`cmspam/qemu-patched`](https://github.com/cmspam/qemu-patched). `pacman -S qemu-desktop` automatically pulls the patched version.
 - `[xe-virt-host-v3]` — patched virglrenderer from [`cmspam/xe-virt-repo`](https://github.com/cmspam/xe-virt-repo). `pacman -S virglrenderer` pulls the patched version.
 - `[gamescope-patched-v3]` — patched gamescope from [`cmspam/gamescope-patched`](https://github.com/cmspam/gamescope-patched), fixing nvidia steam-remote-play black screen + inverted colors.
 
 `SigLevel = Optional TrustAll` for all (the upstream pipelines use `--skippgpcheck`).
 
-## Secure Boot: shim + MOK (no UEFI db enrollment)
+## Secure Boot: per-machine sbctl keys, direct firmware DB enrollment
 
-The chain is `firmware (MS in db) → shim (Fedora MS-signed) → grub (Fedora CA in shim's vendor_cert) → kernel (cache22 cert via MOK)`. Microsoft's keys stay in `db` untouched, preserving dual-boot Windows + fwupd + signed third-party drivers.
+The chain is `firmware (cache22 PK/KEK/db + Microsoft DB, enrolled at first boot) → sd-boot (signed by cache22 SB key) → UKI (signed by cache22 SB key)`. Microsoft DB keys are enrolled alongside ours via `sbctl enroll-keys --microsoft` so dual-boot Windows + fwupd + signed third-party drivers all keep working.
 
-The installer's `queue_mok_enrollment()` runs `mokutil --import` against the cache22 cert with password `cache22sb`. On first reboot, shim sees `MokListNew` non-empty and launches MokManager; the user types the password to confirm enrollment. The installer also drops the cert at `/EFI/BOOT/sbcert.der` as a fallback for MokManager's "Enroll key from disk" path.
+Keys are generated by `sbctl create-keys` at install time and live at `/var/lib/cache22/sbkey/` (mode 0700, on encrypted root). The installer stages auto-enroll `.auth` files on the ESP and sets `secure-boot-enroll = force` in `loader.conf`; the user's only manual step is putting firmware in setup mode once before first boot.
 
-Post-install management is via `cache22-secureboot` (`status` / `enroll` / `unenroll`). We do not enroll into UEFI db, do not generate per-machine sbctl keys, and do not run local re-signers. See [`docs/SECUREBOOT.md`](docs/SECUREBOOT.md).
+Post-install management is via `cache22-secureboot` (`status` / `enable` / `disable` / `rotate-keys`). See [`docs/SECUREBOOT.md`](docs/SECUREBOOT.md).
 
 ## TPM2 LUKS unlock: post-install via `cache22-encryption`
 
-Encryption is set up at install time (cryptsetup, LUKS2). TPM2 enrollment is post-install via `cache22-encryption`, binding to PCR 0+7 (firmware + Secure Boot state) so kernel updates don't break unlock.
+Encryption is set up at install time (cryptsetup, LUKS2). TPM2 enrollment is post-install via `cache22-encryption`, binding to **signed PCR 11 policy** (`--tpm2-public-key=`). Each UKI rebuilt by `resign-uki` ships a fresh `.pcrsig` signed by the matching private key, so kernel updates / karg changes / image switches all keep TPM unseal working without LUKS re-enrollment.
 
 ## Variants: single Containerfile, build-arg driven
 

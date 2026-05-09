@@ -56,9 +56,9 @@ sudo bootc switch ghcr.io/cmspam/cache22-cachy-kde:rolling
 sudo systemctl reboot
 ```
 
-This works, but the live ISO is the recommended path for one big reason: **Secure Boot.** The installer sets up Fedora's MS-signed shim + grub2 on your ESP via bootupd and queues the cache22 SB cert for MOK enrollment, so SB works with one password prompt at first boot — no firmware Setup Mode dance, no certificate juggling. Going via `bootc switch` from another distro keeps that distro's bootloader, so you'd have to wire up MOK enrollment yourself.
+This works for `bootc switch` semantics, **but it's not supported as a long-term cache22 install path**: the new image expects sd-boot + a per-machine SB key + the cache22 UKI hook on the ESP, none of which are set up by `bootc switch` alone. For a clean cross-bootc move, install from the cache22 live ISO instead (or use `cache22-repair` from it).
 
-**We strongly recommend leaving Secure Boot ENABLED throughout the install.** The installer ISO itself is SB-bootable (it uses Fedora's MS-signed shim + Fedora-signed kernel), so you don't need to disable SB to run it, and keeping SB on the whole way makes the first-boot MokManager prompt fire automatically.
+**The live ISO itself is SB-bootable** (Fedora's MS-signed shim + Fedora-signed kernel), so you can run it under stock SB. After install, **before the first reboot of the target system**, enter firmware setup and either disable Secure Boot or clear the Platform Key (puts firmware in setup mode). On the first boot of cache22, sd-boot auto-enrolls cache22's keys + Microsoft DB keys, and SB enforcement engages.
 
 ### Auto vs tmpfs scratch during install
 
@@ -71,40 +71,33 @@ Override the auto-detection with `--scratch tmpfs` (force RAM scratch even on lo
 
 ## Secure Boot
 
-cache22 uses the standard **shim + MOK** chain — same pattern Bazzite, Fedora, Ubuntu, and SUSE ship — so it works on stock OEM hardware without any firmware-Setup-Mode dance.
+cache22 boots via **systemd-boot loading a per-machine-signed UKI**. The signing key is generated locally at install time by `sbctl` and lives only on the encrypted root — there is no central CI signing key.
 
 ```
-firmware (Microsoft keys, factory-shipped)
-  → shim                (Microsoft-signed Fedora shim, in EFI db)
-    → grub2             (Fedora-signed, trusted via shim's vendor_cert)
-      → kernel          (cache22-signed, trusted via MOK enrollment)
+firmware (cache22 PK/KEK/db + Microsoft DB, enrolled at first boot)
+  → systemd-boot        (signed by cache22 SB key)
+    → UKI               (kernel + initramfs + cmdline + .pcrsig, signed by cache22 SB key)
 ```
 
-Every kernel is signed at image build time with the cache22 SB key. You enroll the matching cert into MOK once, at first boot.
+The cmdline lives inside the signed UKI, so it can't be edited at the loader (no menu editor; sd-stub ignores external overrides under SB). The same UKI carries a TPM2 PCR-policy signature, so LUKS+TPM unsealing accepts any kernel update without re-enrollment.
 
 ### What you do
 
-1. **Leave Secure Boot ON when you install.** The installer ISO is SB-bootable (Fedora kernel + Fedora-signed bootloader); you don't have to disable SB to run it.
-2. **Run `cache22-install`.** It handles everything: bootupd installs Fedora's signed shim + grub2 on your ESP, the cache22 cert lands at `/EFI/BOOT/sbcert.der`, and `mokutil --import` queues MOK enrollment.
-3. **First reboot: MokManager appears (blue screen).** Type:
-   ```
-   Enroll MOK → Continue → Yes → password: cache22sb → Reboot
-   ```
-4. Done. Every boot verifies the cache22-signed kernel against the MOK-enrolled cert. Subsequent kernel updates come pre-signed in the image — no further enrollment needed.
-
-If MokManager doesn't auto-launch or the password prompt fails, choose **"Enroll key from disk"** and pick `/EFI/BOOT/sbcert.der`.
+1. **Run `cache22-install` from the live ISO** (which boots fine under stock Secure Boot). It generates the per-machine key, stages auto-enroll files for sd-boot, builds the first signed UKI.
+2. **Before the first reboot of the installed system:** enter firmware setup, either disable Secure Boot or clear the Platform Key (puts firmware in setup mode).
+3. **First boot of cache22:** sd-boot auto-enrolls cache22's PK/KEK/db plus Microsoft DB keys (so dual-boot Windows still works), then loads the signed UKI.
+4. Done. Subsequent `bootc upgrade` runs rebuild the per-deploy UKI with the local key automatically.
 
 ### Post-install management
 
 ```bash
-sudo cache22-secureboot status     # show SB state, MOK enrollment, kernel sig
-sudo cache22-secureboot enroll     # (re-)queue MOK enrollment + force boot to MokManager
-sudo cache22-secureboot unenroll   # queue MOK removal
+sudo cache22-secureboot status         # SB state, key fingerprint, signed UKI
+sudo cache22-secureboot enable         # generate key if missing, enroll into firmware DB
+sudo cache22-secureboot disable        # remove our keys from firmware DB (keep Microsoft)
+sudo cache22-secureboot rotate-keys    # backup + regenerate + re-enroll + re-sign + re-seal
 ```
 
-Most users never need this — the installer handles enrollment. It's there for users who skipped enrollment, want to re-enroll after a key rotation, or want to remove the cert.
-
-See [`docs/SECUREBOOT.md`](docs/SECUREBOOT.md) for the full chain details and threat model.
+See [`docs/SECUREBOOT.md`](docs/SECUREBOOT.md) for the full chain, threat model, and PCR policy details.
 
 ## Upgrading
 
@@ -117,7 +110,7 @@ sudo cache22-update --app-updates  # also: flatpak update + distrobox upgrade --
 
 Per-package layer rechunking means typical daily upgrades download only the layers whose contents actually changed (~100–300 MB), not the full multi-GB image.
 
-Bootloader binaries (shim, grub2) on the ESP update automatically — `bootloader-update.service` runs `bootupctl update` on every boot, picking up any newer Fedora binaries that arrived in the new image. No separate command needed.
+sd-boot on the ESP gets re-signed and re-installed by `cache22-resign-uki` whenever the in-image binary at `/usr/lib/systemd/boot/efi/systemd-bootx64.efi` is newer than the on-ESP copy. No separate command needed.
 
 If something boots wrong, `sudo bootc rollback && sudo systemctl reboot` puts you back on the previous deployment. cache22 also runs healthchecks 2 minutes after every boot and auto-rolls-back after 3 consecutive failures (drop your own checks into `/etc/cache22/healthcheck.d/required.d/` to extend).
 
@@ -250,7 +243,7 @@ sudo cache22-encryption enroll /dev/nvme0n1p3
 | --- | --- |
 | `cache22-update` | Recommended upgrade frontend — pull + stage + finalize, optional `--reboot` and `--app-updates`. |
 | `cache22-rebase` | Switch variants or to any other bootc image. |
-| `cache22-secureboot` | Manage MOK enrollment of the cache22 SB cert. `status`, `enroll` (queue + set BootNext to MokManager), `unenroll`. |
+| `cache22-secureboot` | Manage the per-machine SB key + firmware DB enrollment. `status`, `enable`, `disable`, `rotate-keys`. |
 | `cache22-karg` | Manage persistent kernel command-line args. |
 | `cache22-encryption` | TPM2 auto-unlock for LUKS volumes. |
 | `cache22-shell` | Open a CachyOS distrobox container for non-immutable package work. |
@@ -264,21 +257,11 @@ Want a cache22 with different packages, your own patched repo, different desktop
 Steps:
 
 1. **Fork on GitHub.** GitHub Actions activates automatically on the fork.
-2. **Generate a Secure Boot signing key + cert** (skip if you don't care about SB):
-   ```bash
-   openssl req -newkey rsa:2048 -nodes -keyout sb.key -new -x509 \
-       -sha256 -days 3650 -subj "/CN=your-name SB key/" -out sb.crt
-   ```
-3. **Add the private key as a repo secret.** Settings → Secrets and variables → Actions → New repository secret. Name: `SECUREBOOT_PRIVATE_KEY`. Value: paste the contents of `sb.key`.
-4. **Commit the cert into the fork.** Replace both copies (must be identical content):
-   - `system_files/common/usr/share/cache22/secureboot.crt` — baked into the image; the installer drops it on the target ESP as `/EFI/BOOT/sbcert.der` and feeds it to `mokutil --import`.
-   - `secureboot.crt` at the repo root — baked into the live ISO's ESP for the MokManager "Enroll key from disk" fallback path.
-5. **(Optional) change the MOK enrollment password.** `MOK_PASSWORD="cache22sb"` in `installer/cache22-install` is what users type at MokManager on first boot. Set your own if branding matters.
-6. **Edit packages / system_files / Containerfile / variants.json** to taste. `packages/{cachy,arch}-{common,kde,server}.txt` is the package list, one per line. `system_files/common/` is the overlay applied on top of the base image.
-7. **Push.** The image build runs automatically on changes under `Containerfile`, `packages/**`, `system_files/**`, `scripts/**`. Built images land at `ghcr.io/<your-github-username>/cache22-<variant>:rolling`.
-8. **Install your fork** with the cache22 ISO using `--image ghcr.io/<your-github-username>/cache22-<variant>:rolling`, or from an existing cache22 install with `sudo cache22-rebase --image ghcr.io/<your-github-username>/cache22-<variant>:rolling`.
+2. **Edit packages / system_files / Containerfile / variants.json** to taste. `packages/{cachy,arch}-{common,kde,server}.txt` is the package list, one per line. `system_files/common/` is the overlay applied on top of the base image.
+3. **Push.** The image build runs automatically on changes under `Containerfile`, `packages/**`, `system_files/**`, `scripts/**`. Built images land at `ghcr.io/<your-github-username>/cache22-<variant>:rolling`.
+4. **Install your fork** with the cache22 ISO using `--image ghcr.io/<your-github-username>/cache22-<variant>:rolling`.
 
-If you skip the SB key (steps 2–5), builds still succeed but the kernel images aren't signed — your fork's installs will fail shim verification under SB. Users will need to disable SB or boot a kernel signed by another trusted key. Everything else is unaffected.
+No CI signing key to configure: cache22's UKI signing is per-machine, generated locally at install time. Forks don't need any secrets in their GitHub repo for SB to work end-to-end.
 
 For deeper changes (adding a whole new family like a GNOME variant, restructuring the build), see [`docs/IMAGE_BUILD.md`](docs/IMAGE_BUILD.md), [`docs/INSTALLER.md`](docs/INSTALLER.md), [`docs/SECUREBOOT.md`](docs/SECUREBOOT.md), and [`ARCHITECTURE.md`](ARCHITECTURE.md).
 

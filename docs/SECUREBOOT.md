@@ -1,90 +1,86 @@
 # Secure Boot
 
-cache22 uses the **shim + MOK** chain. Firmware verifies a Microsoft-signed shim, which verifies a Fedora-signed grub2, which uses shim's `shim_lock` verifier to check the cache22-signed kernel against the cache22 cert enrolled into MOK at install time.
+cache22 boots a per-machine-signed UKI loaded by systemd-boot. The signing key is generated at install time by `sbctl` on the user's machine and lives only on the encrypted root — there is no central CI signing key.
 
 ## Boot chain
 
 ```
-UEFI db (Microsoft keys, factory-shipped)
-    └─ /boot/efi/EFI/BOOT/BOOTX64.EFI        (Fedora's MS-signed shim — removable-media fallback)
-    └─ /boot/efi/EFI/cache22/shimx64.efi     (Fedora's MS-signed shim — primary, efibootmgr entry)
-        └─ /boot/efi/EFI/cache22/grubx64.efi (Fedora's signed grub2, Fedora CA in shim's vendor_cert)
-            └─ /boot/grub2/grub.cfg           (bootupd's static config; sources grub.cfg.d/*.cfg, runs blscfg)
-                └─ /boot/loader/entries/*.conf (BLS Type-1; bootc updates these on every upgrade)
-                    └─ /boot/ostree/<deploy>/vmlinuz + initramfs
-                        └─ shim_lock_verifier asks shim
-                            └─ shim checks kernel against MOK
-                               (cache22 cert, enrolled at install)
+UEFI db (cache22 PK/KEK/db + Microsoft DB keys, enrolled at first boot)
+    └─ /efi/EFI/systemd/systemd-bootx64.efi      (signed by cache22 SB key)
+        └─ /efi/EFI/Linux/cache22-<csum>.efi     (UKI: kernel + initramfs +
+                                                  cmdline + .pcrsig, signed
+                                                  by cache22 SB key)
 ```
 
-Everything past the kernel handoff (initramfs, kernel modules) loads without further signature checks. If you can write to `/boot`, signature checking is already irrelevant.
+The UKI's `.cmdline` PE section is part of the signed payload — under Secure Boot, sd-stub ignores any external cmdline override (per `systemd-stub(7)`). The same UKI carries a `.pcrsig` signed by the per-machine TPM PCR-policy key, so LUKS+TPM unsealing accepts any PCR 11 value with a valid signature — kernel updates do not require LUKS re-enrollment.
 
-## Why Fedora binaries
+## Per-machine keys
 
-Fedora's `shim-x64` is Microsoft-signed and accepted by every OEM's factory `db`. Fedora's `grub2-efi-x64` is signed by the Fedora SB CA inside shim's `.vendor_cert` PE section, so shim trusts it automatically. The chain MS → shim → grub works on any UEFI system without MOK enrollment for grub — only the kernel needs MOK.
-
-The Containerfile pulls current Fedora binaries via `FROM registry.fedoraproject.org/fedora:latest` in a multi-stage build. Bootupd manages ESP updates automatically when new images are deployed.
-
-## What gets signed at build time
-
-`scripts/sign-secureboot.sh` plain-`sbsign`s every kernel at `/usr/lib/modules/*/vmlinuz` with the cache22 SB key. No `objcopy`, no SBAT injection — the bzImage's dual-format PE is preserved as-is. Per shim's SBAT spec, SBAT applies to chainloaded EFI binaries (shim, grub), not kernels.
-
-The cache22 SB private key is mounted via buildah `--mount=type=secret`, scoped to the signing RUN step only — never persisted to a layer. Fork-PR builds without secret access ship unsigned kernels (boot fine with SB off; fail shim verification with SB on, by design).
-
-## Install-time wiring
-
-`bootupctl install` (invoked by `bootc install --bootloader=grub`) handles the ESP:
-
-- `/EFI/cache22/shimx64.efi` — Fedora's MS-signed shim (primary boot entry)
-- `/EFI/cache22/grubx64.efi` — Fedora's signed grub2
-- `/EFI/BOOT/BOOTX64.EFI` — removable-media fallback (same shim)
-- `/boot/grub2/grub.cfg` + `/boot/grub2/grubenv` — static grub config written by bootupd
-- `/boot/grub2/bootuuid.cfg` — partition UUID wiring
-- efibootmgr registration pointing at `/EFI/cache22/shimx64.efi`
-
-The installer then adds cache22-specific extras:
-
-- `/EFI/BOOT/sbcert.der` — cache22 cert in DER form (manual MokManager fallback: "Enroll key from disk")
-- `/EFI/BOOT/mmx64.efi` — MokManager copy at the removable-media path; required when firmware falls back to `/EFI/BOOT/BOOTX64.EFI` and shim looks for mmx64 alongside itself
-- `/boot/boot → .` self-symlink — BLS entry path resolution
-- `efibootmgr --create` belt-and-braces entry for `/EFI/cache22/shimx64.efi` (only if bootupd didn't register one)
-
-`queue_mok_enrollment()` runs `mokutil --import` with password `cache22sb`. This writes `MokListNew` in NVRAM; shim picks it up on the next boot.
-
-## First boot UX
-
-1. Firmware loads shimx64.efi (MS-signed, accepted via db).
-2. shim sees `MokListNew` non-empty → launches MokManager (blue screen).
-3. Pick "Enroll MOK" → "Continue" → "Yes" → type `cache22sb`.
-4. MokManager writes the cert into `MokListRT` and reboots.
-5. Firmware → shim → grub → kernel. shim now trusts cache22 via MOK; the cache22-signed kernel passes verification.
-
-Subsequent boots skip MokManager — the cert stays in `MokListRT` until explicitly removed.
-
-If the password flow fails, pick "Enroll key from disk" and select `/EFI/BOOT/sbcert.der`.
-
-## After install: cache22-secureboot
+Generated by `/usr/libexec/cache22/sb-key-init` (which calls `sbctl create-keys`) on first install:
 
 ```
-cache22-secureboot status      # SB state, MOK enrollment, kernel sig
-cache22-secureboot enroll      # queue MOK enrollment + set BootNext to MokManager
-cache22-secureboot unenroll    # queue MOK removal
+/var/lib/cache22/sbkey/keys/PK/PK.{key,pem,der}     # Platform Key
+/var/lib/cache22/sbkey/keys/KEK/KEK.{key,pem,der}   # Key Exchange Key
+/var/lib/cache22/sbkey/keys/db/db.{key,pem,der}     # SB signing key
+/var/lib/cache22/sbkey/tpm-pcr11.{key,pub}          # TPM PCR-policy key
 ```
 
-Most users never need this — the installer handles enrollment.
+Mode `0700` on the directory and `0600` on private keys. The directory lives on the root filesystem, which is LUKS-encrypted in the recommended install — keys are at-rest encrypted.
 
-## Bootloader updates
+## Firmware DB enrollment
 
-`bootloader-update.service` (from the `bootupd` package) runs `bootupctl update` on every boot. It's idempotent — a no-op when the ESP already matches `/usr/lib/efi/` in the running image. When `bootc upgrade` delivers a new image with updated Fedora bootloader binaries, the next reboot refreshes the ESP automatically.
+cache22 enrolls **its own PK + KEK + db** plus **Microsoft DB keys** into the firmware. Microsoft keys are kept so dual-boot Windows, fwupd-signed firmware updates, and option ROMs all keep working.
 
-## Threat model and known limitations
+Enrollment is automatic on first boot when sd-boot finds firmware in setup mode and `secure-boot-enroll = force` in `loader.conf`. Setup mode is the user's only manual step:
 
-**What SB protects against:** a modified bootloader or kernel image on disk cannot be loaded — the MS-signed shim won't load an unsigned grub; shim won't load a kernel whose signature isn't in MOK or a trusted vendor cert.
+1. Reboot into firmware setup (F2 / Del / F10 / vendor-specific at power-on).
+2. Find Secure Boot settings.
+3. Either **disable Secure Boot**, or **clear / reset the Platform Key** (this puts firmware in setup mode).
+4. Save & exit; boot into cache22.
 
-**What SB does NOT protect (same gap as Bazzite, default Fedora, default Ubuntu):**
+On that first boot, sd-boot auto-enrolls cache22's keys and Microsoft DB keys, then SB enforcement engages. Run `cache22-secureboot status` to confirm.
 
-The initramfs lives unsigned on `/boot` (ext4) and is loaded by grub directly with no signature semantics. An attacker with offline write access to `/boot` can replace `initramfs.img` with one that logs the LUKS passphrase, bypasses unlock, or persists a rootkit before pivoting to the encrypted root.
+## Per-deploy UKI build (the runtime hook)
 
-**Mitigation:** TPM2 PCR-bound LUKS unlock via `cache22-encryption`. PCR 0 (firmware) and PCR 7 (Secure Boot state) are bound to the LUKS unlock key. Any tampering with those measurements causes the TPM to refuse key release — the user gets a passphrase prompt instead of auto-unlock, surfacing that something changed. This is detection, not prevention.
+`/usr/libexec/cache22/resign-uki` runs:
 
-For environments where offline `/boot` access is a real threat, encrypting `/boot` itself (LUKS + grub's `cryptodisk` module) is the practical extra step. The installer's `--luks` path currently encrypts root only.
+- automatically after every `bootc upgrade` / `bootc switch` / `bootc rollback` (via `cache22-resign-uki.service`, `WantedBy=bootc-status-updated.target`),
+- automatically when the user edits `/etc/cache22/extra-cmdline` (via `cache22-resign-uki.path`),
+- on demand via `systemctl start cache22-resign-uki.service`.
+
+For each live ostree deploy, it walks `/sysroot/ostree/deploy/<state>/deploy/<csum>/usr/lib/modules/<kver>/`, assembles the cmdline (image-default kargs + user kargs from `extra-cmdline` + the `ostree=...` path), and runs `ukify build` with `--secureboot-private-key`, `--secureboot-certificate`, `--pcr-private-key`, `--pcr-public-key`. The signed `.efi` is atomically written to `/efi/EFI/Linux/cache22-<csum>.efi`. Stale UKIs (deploys that no longer exist) are GC'd only after every desired UKI is confirmed present.
+
+## Helper tool
+
+```
+cache22-secureboot status         # SB state, key fingerprint, signed UKI
+cache22-secureboot enable         # generate key if missing, enroll into firmware DB
+cache22-secureboot disable        # remove our keys from firmware DB (Microsoft kept)
+cache22-secureboot rotate-keys    # backup + regenerate + re-enroll + re-sign + re-seal
+```
+
+## TPM2 LUKS unlock
+
+Bind the LUKS keyslot to a signed PCR 11 policy:
+
+```
+sudo cache22-encryption enroll /dev/<root-luks>
+```
+
+This calls `systemd-cryptenroll --tpm2-public-key=/var/lib/cache22/sbkey/tpm-pcr11.pub --tpm2-public-key-pcrs=11`. Every UKI rebuilt by `resign-uki` ships a fresh `.pcrsig` signed by the matching private key, so kernel updates, karg changes, and image switches all keep TPM unseal working without re-enrollment.
+
+If TPM unseal ever fails (firmware update, SB state change), the user gets a passphrase prompt instead of auto-unlock — surfacing the change.
+
+## Threat model
+
+What's protected:
+
+- Bootloader (sd-boot) and UKI (kernel + initramfs + cmdline) are SB-signed; firmware refuses unsigned alternatives.
+- Cmdline tampering at the loader is impossible: there is no menu editor (`editor = no` in `loader.conf`) and sd-stub ignores external cmdline overrides under SB.
+- Per-deploy UKI hash is measured into PCR 11 by sd-stub; a swapped initramfs breaks TPM unseal.
+- Firmware-level SB state changes are detected: the LUKS unseal sees a different PCR set than was signed and falls back to passphrase.
+
+What's not protected:
+
+- Anyone with root on the running system can sign a malicious UKI with the local key. This is the same ceiling as "root on a Linux box has full control" — relocated, not weakened. Mitigation: keep root encrypted (LUKS) so an offline attacker can't extract the key.
+- If the per-machine key file leaks AND the attacker has physical access to enter firmware setup, they can boot a malicious UKI. The user's effective enrollment secret is firmware setup-mode access.

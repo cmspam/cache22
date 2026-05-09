@@ -4,34 +4,30 @@ The bootc/ostree/dracut ecosystem is built around Fedora's assumptions; several 
 
 ## Architecture
 
-- Image builds run in GitHub Actions: matrix of 4 variants (cachy-kde, cachy-server, arch-kde, arch-server). cachy variants build on `cachyos/cachyos-v3`; arch variants on `archlinux:latest`. The Containerfile multi-stage build installs packages, generates initramfs, signs kernels, runs `bootc container lint`, and hand-writes the bootupd payload tree via `generate-bootupd-metadata.sh`.
+- Image builds run in GitHub Actions: matrix of 4 variants (cachy-kde, cachy-server, arch-kde, arch-server). cachy variants build on `cachyos/cachyos-v3`; arch variants on `archlinux:latest`. The Containerfile installs packages, generates initramfs, runs `bootc container lint`. **No SB signing or bootloader binaries ship in the image** — sd-boot comes from the Arch `systemd` package, UKIs are built and signed at install / `bootc upgrade` time on the user's machine.
 - Each variant is rechunked into ~120 per-package layers via `scripts/rechunk-cache22.py`.
 - Images published to `ghcr.io/cmspam/cache22-{cachy,arch}-{kde,server}:rolling`.
-- Live ISO is a Fedora-44 live environment that pulls the variant image from ghcr at install time. The ISO uses a Fedora kernel (SB-bootable with default Microsoft keys); the installed system is Arch/CachyOS.
-- Disk layout: ESP (512M FAT32, `/boot/efi`) + `/boot` (2G ext4 XBOOTLDR, kernels + initramfs + BLS entries + grub2 config) + root (rest minus 30G, btrfs/xfs/ext4) + scratch (30G ext4, freed back into root after install). With `--luks`, only root is encrypted; ESP and `/boot` stay unencrypted (UEFI requirement for ESP; grub needs to read `/boot` before the initramfs can unlock LUKS).
+- Live ISO is a Fedora-44 live environment that pulls the variant image from ghcr at install time. The ISO uses a Fedora kernel (SB-bootable with default Microsoft keys); the installed system is Arch/CachyOS booted via per-machine-signed UKIs.
+- Disk layout: ESP (2 GB FAT32, mounted at `/efi`, holds sd-boot + per-deploy UKIs) + root (rest minus 30 GB, btrfs/xfs/ext4) + scratch (30 GB ext4, freed back into root after install). With `--luks`, only root is encrypted; ESP stays unencrypted (UEFI requirement). No separate `/boot` partition.
 
 ## Boot chain
 
 ```
-firmware (Microsoft keys in db, factory-shipped)
-  └─ /boot/efi/EFI/BOOT/BOOTX64.EFI        (Fedora's MS-signed shim — removable-media fallback)
-  └─ /boot/efi/EFI/cache22/shimx64.efi     (Fedora's MS-signed shim — primary, efibootmgr)
-      └─ /boot/efi/EFI/cache22/grubx64.efi (Fedora's signed grub2, Fedora CA in shim's vendor_cert)
-          └─ /boot/grub2/grub.cfg           (bootupd static config; sources grub.cfg.d/*.cfg, runs blscfg)
-              └─ /boot/loader/entries/*.conf (BLS Type-1)
-                  └─ /boot/ostree/<deploy>/vmlinuz + initramfs
-                      └─ shim_lock_verifier asks shim
-                          └─ shim verifies kernel against MOK (cache22 cert)
+firmware (cache22 PK/KEK/db + Microsoft DB, enrolled via sd-boot auto-enroll on first boot)
+  └─ /efi/EFI/systemd/systemd-bootx64.efi    (signed by cache22 SB key)
+      └─ /efi/EFI/Linux/cache22-<csum>.efi   (UKI: kernel + initramfs + cmdline + .pcrsig)
+          └─ ostree-prepare-root binds the deploy at /sysroot
+              └─ switch_root → systemd
 ```
 
-Grub over systemd-boot: grub bundles its own ext4 driver and reads `/boot` directly. sd-boot only reads FAT, which would require duplicating every kernel onto the ESP. Kernels live in exactly one place.
+The UKI is loaded directly by sd-boot — there is no menu editor, no shim, no MOK. Cmdline comes from the UKI's signed `.cmdline` PE section (sd-stub ignores external overrides under SB). See [`SECUREBOOT.md`](SECUREBOOT.md).
 
 ## Install flow (high-level)
 
 1. Boot live ISO. Connect WiFi if needed (`nmcli`).
-2. Run `cache22-install`. Picks variant (interactive picker fetches `variants.json` from the repo), partitions, formats, mounts ESP at `/boot/efi` + `/boot` + root, pulls the image (~8 GB compressed), runs `bootc install to-filesystem --bootloader=grub` (which invokes `bootupctl install` — see below), writes user/hostname/locale/timezone into `<deploy>/etc/`, adds the cache22 ESP extras, runs `mokutil --import`, reclaims scratch into root.
-3. Reboot. shim sees `MokListNew` non-empty → MokManager appears. User types `cache22sb`. Cert lands in `MokListRT`.
-4. Second reboot: firmware → shim → grub → kernel (cache22-signed; shim verifies via MOK). initramfs unlocks LUKS if needed; `ostree-prepare-root` sets up the overlay root; main systemd boots.
+2. Run `cache22-install`. Picks variant, partitions, formats, mounts ESP at `/efi` + root, pulls the image (~8 GB compressed), runs `bootc install to-filesystem --bootloader=none`, writes user/hostname/locale/timezone + per-machine kargs into `<deploy>/etc/`, generates per-machine SB + TPM keys (`sbctl create-keys`), stages auto-enroll `.auth` files (`sbctl enroll-keys --microsoft --export auth`), installs sd-boot via `bootctl install`, builds the first signed UKI via `cache22-resign-uki`, reclaims scratch into root.
+3. **Before reboot:** user enters firmware setup, either disables Secure Boot or clears the Platform Key (puts firmware in setup mode).
+4. First boot: sd-boot auto-enrolls cache22's keys (PK + KEK + db) plus Microsoft DB keys. Then loads the signed UKI; sd-stub validates `.cmdline` and `.pcrsig`; ostree-prepare-root binds the deploy; main systemd boots.
 
 ## Required image-side fixes
 
@@ -65,31 +61,24 @@ Without `add_dracutmodules+=" ostree "` in `/etc/dracut.conf.d/10-cache22.conf`,
 
 Some packages (notably `ostree`) overwrite directories where the overlay lives. The Containerfile applies the overlay both before and after `pacman -S`.
 
-### 5. bootc and bootupd must be built for x86-64-v3 baseline
+### 5. bootc must be built for x86-64-v3 baseline
 
-`cmspam/bootc-v3` builds bootc and bootupd inside a `cachyos/cachyos-v3` container on GHA (AMD EPYC runners). cachyos-v3's default makepkg uses `RUSTFLAGS="-C target-cpu=native"` / `CFLAGS="-march=native"`. The resulting binary emits AMD-only SSE4a instructions and `SIGILL`s on Intel CPUs.
-
-**Fix:** `cmspam/bootc-v3`'s build workflow overrides to `RUSTFLAGS="-C target-cpu=x86-64-v3"` and `CFLAGS="-march=x86-64-v3 -mtune=generic"`. The same trap applies to any future custom build running on cachyos-v3 on GHA.
-
-### 6. bootupd metadata must be hand-written
-
-`bootupd generate-update-metadata` shells out to `rpm -q` to get package versions. cache22 is pacman-based, so this fails. `scripts/generate-bootupd-metadata.sh` constructs `/usr/lib/bootupd/updates/EFI.json` and the payload tree directly, deriving version strings from the NVR directory names under `/usr/lib/efi/`.
+`cmspam/bootc-v3` builds bootc inside a `cachyos/cachyos-v3` container on GHA (AMD EPYC runners) with `RUSTFLAGS="-C target-cpu=x86-64-v3"` and `CFLAGS="-march=x86-64-v3 -mtune=generic"`. Required so the binary runs on any x86-64-v3 CPU (Intel Haswell / AMD Excavator+), not just AMD.
 
 ## Required installer-side recipe
 
 ### A. Mount propagation
 
-- `mount --make-rshared /` on the live ISO before mounting the target. archiso defaults to private propagation; without rshared at root, per-target rshared doesn't propagate into the podman bind mount.
-- Per-target rshared on `$TARGET`, `$TARGET/boot`, `$TARGET/boot/efi` so bootc's `findmnt --mountpoint /target` (run inside the container via `setns(/proc/1/root)`) sees the submounts.
+- `mount --make-rshared /` on the live ISO before mounting the target.
+- Per-target rshared on `$TARGET` and `$TARGET/efi` so bootc's `findmnt --mountpoint /target` sees the submounts.
 
 ### B. Partition typecodes
 
-- p1 ESP — `ef00` (FAT32, 512M)
-- p2 `/boot` — `ea00` (XBOOTLDR ext4, **label `boot`**) — kernels, initramfs, BLS entries, grub2 config
-- p3 root — `8304` (Linux x86-64 root)
-- p4 scratch — `8300` (generic Linux), ext4
+- p1 ESP — `ef00` (FAT32, 2 GB, label `EFI-SYSTEM`)
+- p2 root — `8304` (Linux x86-64 root)
+- p3 scratch — `8300` (generic Linux), ext4
 
-The `/boot` label must be `boot` — grub2's static config from bootupd uses `search --label boot --set root` to locate it.
+No separate `/boot` partition. /boot exists as a regular directory inside the deploy; ostree may write vestigial BLS entries there but cache22 ignores them — sd-boot reads UKIs from the ESP only.
 
 ### C. bootc invocation
 
@@ -98,22 +87,20 @@ The `/boot` label must be `boot` — grub2's static config from bootupd uses `se
         --target-no-signature-verification \
         --generic-image \
         --stateroot default \
-        --bootloader=grub \
-        --karg=root=UUID=$ROOT_UUID \
-        [--karg=rd.luks.uuid=... if LUKS] \
+        --bootloader=none \
         --root-mount-spec=UUID=$ROOT_UUID \
         --skip-finalize \
         /target
 
 Critical flags:
 
-- `--bootloader=grub` — tells bootc to invoke `bootupctl install` (since bootupd is present in the image). bootupd copies shim + grub onto the ESP at `/EFI/cache22/`, writes the removable-media fallback at `/EFI/BOOT/BOOTX64.EFI`, writes `/boot/grub2/` static configs, writes `/boot/grub2/bootuuid.cfg`, runs efibootmgr, and creates `/boot/bootupd-state.json`. The only valid `--bootloader` values are `grub`, `systemd`, and `none`; `auto` does not exist on the bootc CLI.
+- `--bootloader=none` — bootc does not install a bootloader. cache22 owns the bootloader install via `bootctl install` + `cache22-resign-uki`.
 - `--source-imgref containers-storage:$IMAGE` — install from local podman storage, not by re-pulling inside the container.
 - `--root-mount-spec` by UUID — bootc's auto-detection via findmnt is brittle; explicit spec is stable.
 - `--generic-image` — skip firmware-specific bootloader configuration.
-- `--skip-finalize` — defer the final boot-entry write until after the cache22 ESP extras are in place.
+- `--skip-finalize` — defer the final boot-entry write until after sd-boot install + UKI build.
 
-We do NOT use `--composefs-backend`. The composefs strict-verity path broke on linux 7.x (kernel f77f281b6118 → bootc#2174) at "Initializing /etc and /var" with EIO. The legacy ostree backend works: composefs is still used at runtime to mount `/usr` read-only via `[composefs] enabled = true` in `prepare-root.conf`, but without verity enforcement.
+We do NOT use `--composefs-backend`. The composefs strict-verity path broke on linux 7.x at "Initializing /etc and /var" with EIO. The legacy ostree backend works: composefs is still used at runtime to mount `/usr` read-only via `[composefs] enabled = true` in `prepare-root.conf`, but without verity enforcement.
 
 ### D. podman run wrapper for bootc
 
@@ -130,35 +117,34 @@ We do NOT use `--composefs-backend`. The composefs strict-verity path broke on l
 - `-v /var/lib/containers` — the container needs to see the host's containers-storage at the same path.
 - `-v /var/tmp` — skopeo stages large blobs in `/var/tmp`; without this the container's tmpfs fills up.
 
-### E. ESP extras (post-bootc, `install_cache22_esp_extras()`)
+### E. Bootloader install (`install_sb_and_uki()`)
 
-After `bootc install`, these cache22-specific items are added that bootupd doesn't know about:
+After `bootc install`, the installer sets up the SB chain inside the deployed rootfs via chroot:
 
-1. Copy `secureboot.cer` → `/boot/efi/EFI/BOOT/sbcert.der` — cache22 cert in DER form for manual MokManager "Enroll key from disk" fallback.
-2. Copy `mmx64.efi` → `/boot/efi/EFI/BOOT/mmx64.efi` — when firmware falls back to the removable-media path (`/EFI/BOOT/BOOTX64.EFI`), shim looks for MokManager alongside itself. Without this copy, MOK enrollment fails via the removable-media path.
-3. Create `/boot/boot → .` self-symlink — BLS entry paths are partition-relative; this lets `/boot/...`-prefixed paths resolve correctly when grub's `$root` is the `/boot` XBOOTLDR partition.
-4. If no UEFI entry labelled `cache22` exists after bootupd runs, call `efibootmgr --create` pointing at `/EFI/cache22/shimx64.efi`.
+1. Bind /sys/firmware/efi/efivars + /dev + /proc + /sys + the ESP into the deploy.
+2. `chroot $DEPLOY /usr/libexec/cache22/sb-key-init` — generates `/var/lib/cache22/sbkey/` (sbctl PK/KEK/db + TPM PCR-policy keypair).
+3. `chroot $DEPLOY sbctl enroll-keys --microsoft --export auth` — stages `.auth` files at `/efi/loader/keys/auto/` so sd-boot's `secure-boot-enroll = force` enrolls cache22 + Microsoft DB keys on first boot.
+4. `chroot $DEPLOY bootctl install --esp-path=/efi` — copies sd-boot to `/efi/EFI/systemd/systemd-bootx64.efi` + `/efi/EFI/BOOT/BOOTX64.EFI` and writes the NVRAM Boot#### entry via efibootmgr.
+5. Write `/efi/loader/loader.conf` with `default cache22-*.efi`, `editor no`, `secure-boot-enroll force`.
+6. `chroot $DEPLOY /usr/libexec/cache22/resign-uki` — assembles + signs the first UKI from the deploy's vmlinuz + initramfs + cmdline (image kargs from `/usr/lib/bootc/kargs.d/*.toml` + per-machine kargs from `/etc/cache22/extra-cmdline` + the `ostree=...` deploy path), atomically writes to `/efi/EFI/Linux/cache22-<csum>.efi`. Also re-signs sd-boot if the in-image binary is newer than what bootctl just installed.
 
-### F. MOK enrollment
+### F. Per-machine kargs (`configure_deploy()`)
 
-`queue_mok_enrollment()` runs after the ESP extras are in place:
+Per-machine values that must be in the kernel cmdline are written to `<deploy>/etc/cache22/extra-cmdline`:
 
-1. `mokutil --import <cert.der>` with password `cache22sb` (set + confirm). Writes `MokListNew` in NVRAM.
-2. First boot: shim sees `MokListNew` non-empty → MokManager. User picks "Enroll MOK" → "Continue" → "Yes" → types password → cert lands in `MokListRT`.
-3. Subsequent boots: shim trusts the cache22 cert; cache22-signed kernels pass `shim_lock` verification.
+```
+root=UUID=<root-fs-uuid>
+rd.luks.uuid=<luks-part-uuid>           # only if --luks
+rd.luks.name=<luks-part-uuid>=cache22-root
+rd.luks.options=<luks-part-uuid>=discard,tpm2-device=auto
+rootflags=subvol=root,<btrfs opts>      # only if btrfs
+```
 
-If the password flow fails, "Enroll key from disk" + `/EFI/BOOT/sbcert.der` is the fallback.
-
-After install, kernel updates are entirely ostree's domain. `bootc upgrade` writes new BLS entries + kernel + initramfs to `/boot/loader.X/` and `/boot/ostree/<deploy>/`, ostree atomically swaps the loader symlink, grub reads it on next boot. Bootloader binary updates are handled by `bootloader-update.service`.
+`resign-uki` reads this file and concatenates its lines into the UKI's `.cmdline`. Users can append their own kargs via `cache22-karg add KEY=VAL`, which writes to the same file and triggers `cache22-resign-uki.path`.
 
 ### G. Writing user/hostname/locale/timezone into the deployed /etc
 
-**THIS IS A FOOTGUN.** A find with `head -1` can pick `<deploy>/usr/etc` (the immutable image default) instead of `<deploy>/etc` (the writable per-deployment copy):
-
-    DEPLOY_ETC=$(find $TARGET/ostree/deploy -maxdepth 5 -name etc -type d | head -1)
-    # ^ NON-DETERMINISTIC — picks /usr/etc on btrfs
-
-Writing to `/usr/etc/hostname` does nothing useful; ostree's etc-merge treats `hostname`, `machine-id`, etc. as machine-specific and does NOT propagate them from `/usr/etc` into `/etc`. Result: no `/etc/hostname` on the booted system, falls back to `cachyos` from `/etc/os-release`.
+**THIS IS A FOOTGUN.** A find with `head -1` can pick `<deploy>/usr/etc` (the immutable image default) instead of `<deploy>/etc` (the writable per-deployment copy). Writing to `/usr/etc/hostname` does nothing useful; ostree's etc-merge treats `hostname`, `machine-id`, etc. as machine-specific and does NOT propagate them from `/usr/etc` into `/etc`.
 
 The installer uses `deploy_etc()` which searches `$TARGET/ostree/deploy` and `$TARGET/state/deploy`, filtering for paths ending in `*.0/etc` that don't go through `/usr`.
 
@@ -169,7 +155,8 @@ Files written:
 - `$DEPLOY_ETC/localtime` — symlink to `/usr/share/zoneinfo/$TIMEZONE`
 - `$DEPLOY_ETC/passwd`, `shadow`, `group`
 - `$DEPLOY_ETC/sudoers.d/10-wheel` — `%wheel ALL=(ALL:ALL) ALL`
-- `$DEPLOY_ETC/fstab` — ESP mount (`UUID=$ESP_UUID /boot/efi vfat umask=0077 0 2`) and `/boot` mount
+- `$DEPLOY_ETC/fstab` — only the ESP mount (`UUID=$ESP_UUID /efi vfat umask=0077 0 2`) plus optional `/var/home` btrfs subvol
+- `$DEPLOY_ETC/cache22/extra-cmdline` — per-machine kargs
 - User home: `$DEPLOY_VAR/home/$USERNAME` chowned to 1000:1000
 - `$DEPLOY_ETC/subuid` + `subgid` — pre-seeded for rootless podman/distrobox/incus
 
@@ -179,8 +166,8 @@ In disk-scratch auto mode (when `CFG[scratch_part]` is not `tmpfs`):
 
     sync
     umount -R $TARGET
-    parted -s $DISK rm 4
-    parted -s $DISK resizepart 3 100%
+    parted -s $DISK rm 3
+    parted -s $DISK resizepart 2 100%
     partprobe; udevadm settle; sleep 2
     [re-open LUKS if applicable]
     mount $ROOT_DEV $TARGET
@@ -191,7 +178,7 @@ In tmpfs-scratch mode, root already spans the full disk; no reclaim step.
 
 ## x86-64-v3 preflight
 
-The installer checks for `avx avx2 bmi1 bmi2 fma` in `/proc/cpuinfo` flags before proceeding. `lzcnt` and `movbe` are omitted from the check — Linux doesn't always report them by those names even on real v3 CPUs (lzcnt is sometimes reported as `abm`; movbe can be elided), which produces false-positive failures. The five checked flags are sufficient to identify the v3 baseline (Intel Haswell / AMD Excavator or newer).
+The installer checks for `avx avx2 bmi1 bmi2 fma` in `/proc/cpuinfo` flags before proceeding. `lzcnt` and `movbe` are omitted because Linux doesn't always report them under those names even on real v3 CPUs. The five checked flags identify the v3 baseline (Intel Haswell / AMD Excavator or newer).
 
 ## Verifying it actually boots
 

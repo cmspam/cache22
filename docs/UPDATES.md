@@ -9,13 +9,13 @@ CI rebuilds and re-pushes the `rolling` tag for all four variants on every push 
 ## Recommended: `cache22-update`
 
 ```
-sudo cache22-update              # pull + stage + finalize, no reboot
+sudo cache22-update              # pull + stage + sign UKI; no reboot
 sudo cache22-update --reboot     # ... then reboot
 sudo cache22-update --check      # read-only status check
 sudo cache22-update --app-updates  # also flatpak update + distrobox upgrade --all
 ```
 
-Runs `bootc upgrade` then immediately calls `ostree-finalize-staged` so the new BLS entry lands on `/boot` before the script returns. Power loss after the wrapper finishes but before reboot is benign — grub reads whichever entry is current on `/boot/loader.X/entries/`, and ostree's atomic loader-symlink swap guarantees consistency.
+Runs `bootc upgrade` (without `--apply` — that races our hook), drives `ostree-finalize-staged` synchronously, then triggers `cache22-resign-uki.service` to build + sign + place the per-deploy UKI on the ESP. Power loss after the wrapper finishes but before reboot is benign — sd-boot picks the highest-`VERSION_ID` UKI on the ESP, and our hook always writes atomically.
 
 ## Switching variants: `cache22-rebase`
 
@@ -26,29 +26,29 @@ sudo cache22-rebase --image ghcr.io/foo:bar  # arbitrary OCI ref
 sudo cache22-rebase --reboot                 # reboot when done
 ```
 
-Same finalize chain as `cache22-update`. Lets you flip between cachy/arch families and kde/server types without reinstalling.
+Same chain as `cache22-update`: `bootc switch` → finalize → resign UKI. Flips between cachy/arch families and kde/server types without reinstalling.
 
 The picker pulls `variants.json` live from `raw.githubusercontent.com/cmspam/cache22/main/variants.json` so new variants show up without a system update; falls back to `/etc/cache22/variants.json` (baked into the image) when offline.
 
-Rebasing to a non-cache22 bootc image (e.g. `ghcr.io/ublue-os/bazzite:latest`) works — grub on the ESP reads whatever BLS entries the new image writes.
+Rebasing to a non-cache22 bootc image (e.g. `ghcr.io/ublue-os/bazzite:latest`) is **not supported** — the new image won't have `cache22-resign-uki` and won't be expecting sd-boot + per-machine UKI on the ESP. For cross-bootc moves use `cache22-repair` from the cache22 live ISO.
 
 ## Manual / advanced
 
 ```
-sudo bootc upgrade        # fetch + stage; finalize happens at shutdown
+sudo bootc upgrade        # fetch + stage; cache22-resign-uki.path fires
 sudo systemctl reboot     # apply
-sudo bootc rollback       # swap staged + booted; reboot to confirm
+sudo bootc rollback       # swap staged + booted; resign-uki re-orders UKIs
 ```
 
-The wrappers above move the finalize step earlier (while the system is up), which is safer than relying on shutdown timing.
+The wrappers above move the finalize + UKI build earlier (while the system is up), which is safer than relying on a sequence that ends with `--apply`.
 
 ## Bootloader updates
 
-`bootloader-update.service` (from the `bootupd` package, enabled via `system_files/.../50-cache22.preset`) runs `bootupctl update` on every boot. It's idempotent — a no-op when the ESP already matches `/usr/lib/efi/` in the running image. When a `bootc upgrade` delivers newer Fedora shim/grub binaries, the next reboot refreshes the ESP automatically. No separate command needed.
+The runtime hook (`/usr/libexec/cache22/resign-uki`) re-signs and re-installs sd-boot whenever the in-image binary at `/usr/lib/systemd/boot/efi/systemd-bootx64.efi` is newer than the on-ESP copy. systemd's stock `systemd-boot-update.service` is masked because it would copy the unsigned upstream binary over our locally-signed one.
 
 ## Hands-off updates
 
-**`cache22-autoupdate`** (recommended) schedules `cache22-update` on a timer. Two built-in profiles, picked automatically based on whether the default target is graphical or multi-user:
+**`cache22-autoupdate`** schedules `cache22-update` on a timer. Two built-in profiles, picked automatically based on whether the default target is graphical or multi-user:
 
 | Profile | Trigger |
 |---|---|
@@ -66,20 +66,12 @@ sudo cache22-autoupdate status
 **`cache22-autoreboot`** schedules a reboot window. At each firing it waits until a deployment is staged, the last autoupdate run didn't fail, and no active sessions are blocking — then broadcasts a 5-minute warning and reboots.
 
 ```bash
-sudo cache22-autoreboot enable --at 'daily 04:00'       # daily 4am
+sudo cache22-autoreboot enable --at 'daily 04:00'
 sudo cache22-autoreboot enable --at 'Sun 03:00' --window 1h
 sudo cache22-autoreboot disable
 sudo cache22-autoreboot status
 ```
 
-**Bare bootc timer** (minimal alternative — no flatpak/distrobox, no autoreboot integration, no staging banners):
+## How rollback works
 
-```bash
-sudo systemctl enable --now bootc-fetch-apply-updates.timer
-```
-
-## How the boot chain stays consistent
-
-Kernels + initramfs + BLS entries live in exactly one place (`/boot/ostree/<deploy>/` + `/boot/loader.X/entries/`). ostree/bootc handles all of that; cache22 adds no bootloader glue of its own. The ESP is managed by bootupd. `bootc upgrade` writes new BLS entries; grub reads them on next boot.
-
-The rechunker means each upgrade downloads only the layers whose digest changed since the previous rolling tag — typical daily delta is ~100–300 MB.
+`bootc rollback` flips the staged/booted/rollback ordering inside bootc's state, which bumps `/ostree/bootc` mtime, which fires `bootc-status-updated.target`, which starts `cache22-resign-uki.service`. The hook regenerates UKIs with new `.osrel VERSION_ID` priorities so sd-boot's auto-default picks the rolled-back deploy on next reboot. UKIs for live deploys are kept; UKIs for pruned deploys are GC'd only after every desired UKI is confirmed present.
