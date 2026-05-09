@@ -1,0 +1,10 @@
+[Unit]
+Description=cache22: watch /etc/cache22/extra-cmdline for kargs changes
+ConditionPathExists=/run/ostree-booted
+
+[Path]
+PathChanged=/etc/cache22/extra-cmdline
+Unit=cache22-resign-uki.service
+
+[Install]
+WantedBy=multi-user.target

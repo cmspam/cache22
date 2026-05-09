@@ -1,0 +1,16 @@
+[Unit]
+Description=cache22: rebuild + sign + place UKIs on the ESP
+ConditionPathExists=/run/ostree-booted
+After=local-fs.target
+Before=systemd-reboot.service systemd-poweroff.service systemd-halt.service
+DefaultDependencies=no
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/cache22/resign-uki
+TimeoutStartSec=600
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=bootc-status-updated.target

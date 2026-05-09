@@ -1,0 +1,279 @@
+#!/usr/bin/env bash
+# Build + sign + place a UKI on the ESP for every live bootc deploy.
+# Triggered by cache22-resign-uki.{path,service} after bootc state
+# changes. Always-signs; if the per-machine SB key is missing, calls
+# sb-key-init to generate one first.
+#
+# Inputs (read):
+#   bootc status --json              — list of deploys, ordering
+#   /sysroot/ostree/deploy/<state>/deploy/<csum>/usr/lib/modules/<kver>/{vmlinuz,initramfs.img}
+#   /etc/cache22/extra-cmdline       — user kargs (newline-separated)
+#   /usr/lib/bootc/kargs.d/*.toml    — image-default kargs
+#   /var/lib/cache22/sbkey/          — per-machine SB + TPM keys
+#
+# Outputs (write):
+#   /efi/EFI/Linux/cache22-<csum>.efi   — one signed UKI per deploy
+#   /efi/EFI/systemd/systemd-bootx64.efi — re-signed sd-boot if newer
+#
+# Atomicity: every ESP write is to <name>.tmp + fsync + rename. GC
+# of stale UKIs runs only after all desired UKIs are confirmed present.
+
+set -euo pipefail
+
+KEYDIR=/var/lib/cache22/sbkey
+SBKEY="$KEYDIR/keys/db/db.key"
+SBCRT="$KEYDIR/keys/db/db.pem"
+TPM_KEY="$KEYDIR/tpm-pcr11.key"
+TPM_PUB="$KEYDIR/tpm-pcr11.pub"
+EXTRA_CMDLINE=/etc/cache22/extra-cmdline
+ESP=/efi
+[[ -d "$ESP" ]] || ESP=/boot/efi
+UKI_DIR="$ESP/EFI/Linux"
+SDBOOT_DIR="$ESP/EFI/systemd"
+SDBOOT_SRC=/usr/lib/systemd/boot/efi/systemd-bootx64.efi
+
+require_root() {
+    [[ ${EUID} -eq 0 ]] || { echo "resign-uki: must run as root" >&2; exit 1; }
+}
+die() { echo "resign-uki: $*" >&2; exit 1; }
+
+require_root
+
+[[ -d "$ESP" ]] || die "ESP not mounted (looked at /efi and /boot/efi)"
+
+# Ensure SB + TPM keys exist. Always-signs invariant.
+if [[ ! -f "$SBKEY" || ! -f "$TPM_KEY" ]]; then
+    /usr/libexec/cache22/sb-key-init
+fi
+[[ -f "$SBKEY" && -f "$SBCRT" ]] || die "SB key missing after sb-key-init"
+[[ -f "$TPM_KEY" && -f "$TPM_PUB" ]] || die "TPM key missing after sb-key-init"
+
+install -d -m 0755 "$UKI_DIR" "$SDBOOT_DIR"
+
+# Read image-default kargs from /usr/lib/bootc/kargs.d/*.toml.
+# The format is:
+#   kargs = ["foo", "bar=baz"]
+# Multi-line arrays are common; awk extracts the quoted entries.
+read_image_kargs() {
+    local f
+    shopt -s nullglob
+    for f in /usr/lib/bootc/kargs.d/*.toml; do
+        awk '
+            /^[[:space:]]*kargs[[:space:]]*=[[:space:]]*\[/ { in_arr=1 }
+            in_arr {
+                while (match($0, /"[^"]*"/)) {
+                    print substr($0, RSTART+1, RLENGTH-2)
+                    $0 = substr($0, RSTART+RLENGTH)
+                }
+                if (index($0, "]")) in_arr=0
+            }
+        ' "$f"
+    done
+    shopt -u nullglob
+}
+
+# Read user-managed kargs. Newline-separated; '#' comments + blanks ignored.
+read_user_kargs() {
+    [[ -f "$EXTRA_CMDLINE" ]] || return 0
+    sed -e 's/[[:space:]]*#.*$//' -e '/^[[:space:]]*$/d' "$EXTRA_CMDLINE"
+}
+
+# Discover live deploys. We use ostree's on-disk layout rather than
+# `bootc status` because bootc may not be in PATH for early-boot calls.
+# Each deploy dir is /sysroot/ostree/deploy/<stateroot>/deploy/<csum>.<idx>/
+discover_deploys() {
+    local stateroot d csum
+    for stateroot in /sysroot/ostree/deploy/*/; do
+        [[ -d "$stateroot/deploy" ]] || continue
+        for d in "$stateroot/deploy"/*.0/; do
+            [[ -d "$d" ]] || continue
+            csum=$(basename "$d" | sed 's/\.0$//')
+            printf '%s\t%s\n' "$csum" "$d"
+        done
+    done
+}
+
+# Find vmlinuz + initramfs inside a deploy. There should be exactly
+# one /usr/lib/modules/<kver>/ subdir per deploy.
+find_kernel_for_deploy() {
+    local deploy="$1" kver_dir vmlinuz initramfs
+    kver_dir=$(find "$deploy/usr/lib/modules" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | head -1)
+    [[ -n "$kver_dir" ]] || return 1
+    vmlinuz="$kver_dir/vmlinuz"
+    initramfs="$kver_dir/initramfs.img"
+    [[ -f "$vmlinuz" && -f "$initramfs" ]] || return 1
+    printf '%s\t%s\t%s\n' "$(basename "$kver_dir")" "$vmlinuz" "$initramfs"
+}
+
+# Determine the active deploy's csum so we can mark it as the highest-
+# version UKI for sd-boot's auto-default.
+get_booted_csum() {
+    if command -v bootc >/dev/null 2>&1; then
+        bootc status --json 2>/dev/null \
+            | python3 -c 'import json,sys; s=json.load(sys.stdin); print(s.get("status",{}).get("booted",{}).get("ostree",{}).get("checksum","")) if s else ""' \
+            2>/dev/null
+    fi
+}
+
+get_staged_csum() {
+    if command -v bootc >/dev/null 2>&1; then
+        bootc status --json 2>/dev/null \
+            | python3 -c 'import json,sys; s=json.load(sys.stdin); print(s.get("status",{}).get("staged",{}).get("ostree",{}).get("checksum","")) if s else ""' \
+            2>/dev/null
+    fi
+}
+
+# Atomic copy: write to .tmp, fsync, rename. ESP is FAT32, no journal,
+# so partial writes are the failure mode to defend against.
+atomic_install() {
+    local src="$1" dst="$2" tmp
+    tmp="${dst}.tmp.$$"
+    cp "$src" "$tmp"
+    sync -f "$tmp" 2>/dev/null || sync
+    mv -f "$tmp" "$dst"
+}
+
+# Build one UKI for one deploy. Echoes the expected ESP filename.
+build_uki_for_deploy() {
+    local csum="$1" deploy="$2" version_priority="$3"
+    local kinfo kver vmlinuz initramfs
+    kinfo=$(find_kernel_for_deploy "$deploy") || die "no kernel in $deploy"
+    IFS=$'\t' read -r kver vmlinuz initramfs <<<"$kinfo"
+
+    # Cmdline = image kargs + user kargs + ostree= path for this deploy.
+    # ostree= identifies which deploy the kernel binds at root-mount time.
+    local stateroot
+    stateroot=$(echo "$deploy" | sed -n 's|.*/ostree/deploy/\([^/]*\)/.*|\1|p')
+    local ostree_arg="ostree=/ostree/boot.0/${stateroot}/${csum}/0"
+
+    local cmdline
+    cmdline=$(
+        {
+            read_image_kargs
+            read_user_kargs
+            echo "$ostree_arg"
+        } | tr '\n' ' ' | sed 's/  */ /g; s/^ //; s/ $//'
+    )
+
+    local out_name="cache22-${csum:0:16}.efi"
+    local out_path="$UKI_DIR/$out_name"
+    local tmp_uki
+    tmp_uki=$(mktemp --suffix=.efi)
+
+    # version_priority becomes the .osrel VERSION_ID — sd-boot sorts by
+    # this descending and picks the highest as default. 999 = booted,
+    # 1000 = staged, 998..1 = older deploys (more recent → higher).
+    local osrel
+    osrel=$(mktemp)
+    cat > "$osrel" <<EOF
+NAME="cache22"
+ID=cache22
+PRETTY_NAME="cache22 deploy ${csum:0:8}"
+VERSION_ID=${version_priority}
+VERSION="${version_priority}"
+EOF
+
+    echo "==> Building UKI for ${csum:0:16} (kver=$kver, prio=$version_priority)"
+    ukify build \
+        --linux="$vmlinuz" \
+        --initrd="$initramfs" \
+        --cmdline="$cmdline" \
+        --uname="$kver" \
+        --os-release="@$osrel" \
+        --secureboot-private-key="$SBKEY" \
+        --secureboot-certificate="$SBCRT" \
+        --pcr-private-key="$TPM_KEY" \
+        --pcr-public-key="$TPM_PUB" \
+        --pcr-banks=sha256 \
+        --output="$tmp_uki"
+    rm -f "$osrel"
+
+    atomic_install "$tmp_uki" "$out_path"
+    rm -f "$tmp_uki"
+    echo "    wrote $out_path"
+    printf '%s\n' "$out_name"
+}
+
+# Sign + install sd-boot if the in-image binary is newer than ESP's, or
+# if no signed copy is present yet.
+sync_sd_boot() {
+    [[ -f "$SDBOOT_SRC" ]] || die "sd-boot source $SDBOOT_SRC missing (systemd package broken?)"
+    local dst="$SDBOOT_DIR/systemd-bootx64.efi"
+    local fallback="$ESP/EFI/BOOT/BOOTX64.EFI"
+
+    local need_install=0
+    if [[ ! -f "$dst" ]]; then
+        need_install=1
+    elif [[ "$SDBOOT_SRC" -nt "$dst" ]]; then
+        # Compare embedded version via bootctl rather than mtime to avoid
+        # spurious re-signs after a no-op pacman bump.
+        local src_ver dst_ver
+        src_ver=$(bootctl --print-systemd-boot-version --esp-path="$ESP" --boot-path="$ESP" 2>/dev/null \
+                    --root=/usr/lib/systemd/boot/efi || true)
+        dst_ver=$(bootctl --print-systemd-boot-version --esp-path="$ESP" --boot-path="$ESP" 2>/dev/null || true)
+        [[ "$src_ver" != "$dst_ver" ]] && need_install=1
+    fi
+
+    if (( need_install )); then
+        echo "==> Signing + installing sd-boot to $dst"
+        local tmp
+        tmp=$(mktemp --suffix=.efi)
+        sbsign --key "$SBKEY" --cert "$SBCRT" --output "$tmp" "$SDBOOT_SRC"
+        install -d -m 0755 "$SDBOOT_DIR" "$ESP/EFI/BOOT"
+        atomic_install "$tmp" "$dst"
+        atomic_install "$tmp" "$fallback"
+        rm -f "$tmp"
+    fi
+}
+
+# Garbage-collect UKIs not in the keep set. Run only after all builds
+# succeed so a partial run never deletes a working UKI.
+gc_ukis() {
+    local keep_set="$1"
+    local f basename
+    shopt -s nullglob
+    for f in "$UKI_DIR"/cache22-*.efi; do
+        basename=$(basename "$f")
+        if ! grep -qxF "$basename" <<<"$keep_set"; then
+            echo "==> GC: removing stale $basename"
+            rm -f "$f"
+        fi
+    done
+    shopt -u nullglob
+}
+
+# Main: walk deploys, build UKI for each, then sync sd-boot, then GC.
+main() {
+    local booted staged
+    booted=$(get_booted_csum || true)
+    staged=$(get_staged_csum || true)
+
+    local keep_set=""
+    local count=0
+    local entry csum deploy prio uki_name
+
+    while IFS=$'\t' read -r csum deploy; do
+        [[ -z "$csum" ]] && continue
+        # Priority ordering: staged (1000) > booted (999) > others (998..)
+        if [[ "$csum" == "$staged" ]]; then
+            prio=1000
+        elif [[ "$csum" == "$booted" ]]; then
+            prio=999
+        else
+            prio=$(( 998 - count ))
+            count=$(( count + 1 ))
+        fi
+        uki_name=$(build_uki_for_deploy "$csum" "$deploy" "$prio")
+        keep_set+="${uki_name}"$'\n'
+    done < <(discover_deploys)
+
+    [[ -n "$keep_set" ]] || die "no deploys found — refusing to GC"
+
+    sync_sd_boot
+    gc_ukis "$keep_set"
+
+    sync -f "$ESP" 2>/dev/null || sync
+    echo "==> resign-uki done"
+}
+
+main "$@"

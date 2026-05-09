@@ -1,0 +1,3 @@
+# User-managed kernel cmdline kargs. Newline-separated. Lines starting
+# with '#' and blank lines are ignored. cache22-karg edits this file
+# and triggers cache22-resign-uki.service to rebuild the UKI.

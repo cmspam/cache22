@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# Ensure /var/lib/cache22/sbkey/ holds a sbctl-style PK/KEK/db keypair
+# plus a TPM2 PCR-policy keypair. Idempotent: regenerates only when
+# files are missing.
+#
+# Output layout (modes 0700 dir, 0600 keys, 0644 certs):
+#   /var/lib/cache22/sbkey/keys/PK/PK.{key,pem,der}
+#   /var/lib/cache22/sbkey/keys/KEK/KEK.{key,pem,der}
+#   /var/lib/cache22/sbkey/keys/db/db.{key,pem,der}
+#   /var/lib/cache22/sbkey/tpm-pcr11.{key,pub}
+#   /var/lib/cache22/sbkey/.initialized
+
+set -euo pipefail
+
+KEYDIR=/var/lib/cache22/sbkey
+SBCTL_DIR=/var/lib/sbctl
+
+require_root() {
+    [[ ${EUID} -eq 0 ]] || { echo "sb-key-init: must run as root" >&2; exit 1; }
+}
+
+require_root
+
+install -d -m 0700 "$KEYDIR"
+
+# sbctl puts its bundle at /var/lib/sbctl by default; symlink to keep
+# the per-machine root in /var/lib/cache22/ but let sbctl manage
+# layout. If sbctl already initialized to a different path, leave it
+# alone.
+if [[ ! -e "$SBCTL_DIR" ]]; then
+    ln -s cache22/sbkey "$KEYDIR" 2>/dev/null || true
+    install -d -m 0700 "$SBCTL_DIR"
+fi
+
+# sbctl create-keys is idempotent: refuses to overwrite existing keys,
+# so safe to call unconditionally on every hook run.
+if [[ ! -f "$SBCTL_DIR/keys/db/db.key" ]]; then
+    echo "==> Generating cache22 SB keys (PK/KEK/db) via sbctl"
+    sbctl create-keys
+fi
+
+# TPM2 PCR-policy signing keypair. Used by ukify --pcr-private-key /
+# --pcr-public-key to sign predicted PCR 11 measurements that LUKS
+# unseal trusts via systemd-cryptenroll --tpm2-public-key=.
+TPM_KEY="$KEYDIR/tpm-pcr11.key"
+TPM_PUB="$KEYDIR/tpm-pcr11.pub"
+if [[ ! -f "$TPM_KEY" ]]; then
+    echo "==> Generating TPM2 PCR-policy signing key"
+    openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 \
+        -out "$TPM_KEY" 2>/dev/null
+    chmod 0600 "$TPM_KEY"
+    openssl rsa -pubout -in "$TPM_KEY" -out "$TPM_PUB" 2>/dev/null
+    chmod 0644 "$TPM_PUB"
+fi
+
+touch "$KEYDIR/.initialized"
+echo "==> sb-key-init: keys ready at $KEYDIR"
