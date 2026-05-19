@@ -57,14 +57,25 @@ jobs:
       - name: Compute artifact info
         id: info
         run: |
-          ISO=$(ls installer/fedora-live/out/*.iso | head -1)
+          OUTDIR=installer/fedora-live/out
+          ISO=$(ls "$OUTDIR"/*.iso | head -1)
+          KEXEC_VMLINUZ=$(ls "$OUTDIR"/cache22-kexec-*-vmlinuz | head -1)
+          KEXEC_INITRD=$(ls "$OUTDIR"/cache22-kexec-*-initramfs.img | head -1)
+          KEXEC_BOOTSTRAP="$OUTDIR/cache22-kexec-bootstrap.sh"
           SIZE=$(du -h "$ISO" | cut -f1)
           SHA=$(sha256sum "$ISO" | awk '{print $1}')
+          KX_VM_SIZE=$(du -h "$KEXEC_VMLINUZ" | cut -f1)
+          KX_INITRD_SIZE=$(du -h "$KEXEC_INITRD" | cut -f1)
           BASE=$(basename "$ISO")
           echo "iso=$ISO" >> "$GITHUB_OUTPUT"
+          echo "kexec_vmlinuz=$KEXEC_VMLINUZ" >> "$GITHUB_OUTPUT"
+          echo "kexec_initrd=$KEXEC_INITRD"   >> "$GITHUB_OUTPUT"
+          echo "kexec_bootstrap=$KEXEC_BOOTSTRAP" >> "$GITHUB_OUTPUT"
           echo "name=$BASE" >> "$GITHUB_OUTPUT"
           echo "size=$SIZE" >> "$GITHUB_OUTPUT"
           echo "sha=$SHA"   >> "$GITHUB_OUTPUT"
+          echo "kx_vm_size=$KX_VM_SIZE" >> "$GITHUB_OUTPUT"
+          echo "kx_initrd_size=$KX_INITRD_SIZE" >> "$GITHUB_OUTPUT"
           echo "tag=iso-$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
 
       - name: Upload ISO as workflow artifact
@@ -74,29 +85,66 @@ jobs:
           path: installer/fedora-live/out/*.iso
           retention-days: 14
 
-      - name: Upload ISO to GitHub Release (rolling tag)
+      - name: Upload kexec assets as workflow artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: cache22-kexec-assets
+          path: |
+            installer/fedora-live/out/cache22-kexec-*-vmlinuz
+            installer/fedora-live/out/cache22-kexec-*-initramfs.img
+            installer/fedora-live/out/cache22-kexec-bootstrap.sh
+          retention-days: 14
+
+      - name: Upload to GitHub Release (rolling tag)
         if: github.event_name != 'pull_request'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           ISO="${{ steps.info.outputs.iso }}"
+          KX_VM="${{ steps.info.outputs.kexec_vmlinuz }}"
+          KX_INITRD="${{ steps.info.outputs.kexec_initrd }}"
+          KX_BOOTSTRAP="${{ steps.info.outputs.kexec_bootstrap }}"
           TAG="${{ steps.info.outputs.tag }}"
-          NOTES="cache22 installer ISO
+          NOTES="cache22 installer release
+
+          ## Live ISO
 
           - Size: ${{ steps.info.outputs.size }}
           - SHA-256: \`${{ steps.info.outputs.sha }}\`
 
-          Live ISO is a Fedora environment that boots under Secure Boot
-          with default Microsoft keys. The installer generates a
-          per-machine SB key on the target, enrolls it (plus Microsoft
-          DB) into firmware via sd-boot's secure-boot-enroll=force, and
-          signs the installed system's UKI with that key — no MOK,
-          no central CI key. The ISO pulls the latest cache22 image
-          from ghcr.io at install time, so a stale ISO still installs
-          the latest image."
+          Fedora-based live ISO that boots under Secure Boot with
+          default Microsoft keys. The installer generates a per-machine
+          SB key on the target, enrolls it (plus Microsoft DB) into
+          firmware via sd-boot's secure-boot-enroll=force, and signs
+          the installed system's UKI with that key — no MOK, no
+          central CI key.
+
+          ## Kexec install (for VPSes)
+
+          For VPS providers that don't let you mount a custom ISO, use
+          the kexec bootstrap from your VPS's existing OS:
+
+          \`\`\`
+          curl -L https://github.com/cmspam/cache22/releases/latest/download/cache22-kexec-bootstrap.sh \\
+              | sudo bash
+          \`\`\`
+
+          Reads your current network config + SSH authorized_keys,
+          downloads the cache22 live env, kexecs into it. SSH back in
+          as root once it's up and run \`cache22-install\`.
+
+          Asset sizes:
+          - vmlinuz: ${{ steps.info.outputs.kx_vm_size }}
+          - initramfs (with embedded squashfs): ${{ steps.info.outputs.kx_initrd_size }}
+
+          ## Note
+
+          Both the ISO and the kexec assets pull the latest cache22
+          OCI image from ghcr.io at install time, so a stale installer
+          still installs the latest image."
           gh release delete "$TAG" --yes --repo "$GITHUB_REPOSITORY" 2>/dev/null || true
           gh release create "$TAG" \
               --repo "$GITHUB_REPOSITORY" \
-              --title "cache22 installer ISO ($TAG)" \
+              --title "cache22 installer release ($TAG)" \
               --notes "$NOTES" \
-              "$ISO"
+              "$ISO" "$KX_VM" "$KX_INITRD" "$KX_BOOTSTRAP"

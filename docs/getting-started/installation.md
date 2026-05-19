@@ -39,6 +39,38 @@ Insert the USB drive in the target machine and boot it. The live ISO auto-logins
 
 If the machine boots into its existing OS instead of the USB, enter the firmware boot menu (commonly F12, F11, F10, ESC, or F8 at power-on depending on vendor) and select the USB drive.
 
+### Alternative: Install on a VPS via kexec (no ISO mount needed)
+
+For VPS providers that don't let you mount a custom ISO (most cheap-tier cloud VPSes), use the kexec bootstrap. From the VPS's existing OS (Debian / Ubuntu / CentOS / Alpine / Arch — anything with `bash`, `curl`, and `kexec-tools`):
+
+```
+sudo apt-get install -y kexec-tools   # or your distro's equivalent
+curl -L https://github.com/cmspam/cache22/releases/latest/download/cache22-kexec-bootstrap.sh \
+    | sudo bash
+```
+
+The script:
+
+1. Detects your current network config (interface, IP, gateway, DNS).
+2. Reads your `~/.ssh/authorized_keys` (or `/root/.ssh/authorized_keys` if running as root).
+3. Downloads the cache22 live env (kernel ~12 MB + initramfs-with-embedded-squashfs ~1.3 GB).
+4. Builds a kexec target with the network config baked in and your SSH keys injected via kernel cmdline.
+5. Fires `systemctl kexec`. Your SSH session drops; the VPS reboots in place into the cache22 live env, picks up the same IP, and starts sshd with your authorized_keys.
+
+Wait 30-60 seconds, then SSH back in as `root` and run `cache22-install` as you would from the ISO. The host's disks are now free (the live env runs entirely from RAM), so the installer can wipe and install onto `/dev/sda` (or whatever your VPS disk is called).
+
+Useful flags (run `cache22-kexec-bootstrap.sh --help` for the full list):
+
+```
+--release TAG      Pin to a specific release tag (default: latest)
+--ssh-keys PATH    Use a specific authorized_keys file
+--no-reboot        Stage kexec but don't fire systemctl kexec
+                   (review what's loaded, then fire it yourself)
+--no-ssh           Skip SSH key injection (you have console access)
+```
+
+If the kexec'd boot fails to come back up, your VPS provider's web console may show the failure on the serial port (the bootstrap configures `console=ttyS0`).
+
 ## Step 4. Run the installer
 
 At the live shell, run:

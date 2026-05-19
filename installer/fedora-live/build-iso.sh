@@ -174,6 +174,53 @@ PermitEmptyPasswords no
 Banner /etc/issue.net
 EOF
 
+# ─── kexec entry: read SSH keys from kernel cmdline ───────────────
+# When booted via cache22-kexec-bootstrap.sh (i.e. a kexec install on a
+# VPS, no console attached), the bootstrap injects the user's SSH
+# authorized_keys into the kernel cmdline as
+#   cache22.ssh.authorized_keys=<base64>
+# so the user can SSH back in after the kexec. This service decodes
+# them on every boot and writes /root/.ssh/authorized_keys. No-op when
+# the cmdline param is absent (regular ISO boot).
+install -Dm0755 /dev/stdin "$ROOTFS/usr/local/sbin/cache22-kexec-setup" <<'EOF'
+#!/bin/sh
+# Parse cache22.ssh.authorized_keys=<base64> from /proc/cmdline and
+# install it for root. Idempotent.
+set -eu
+keys_b64=$(tr ' ' '\n' < /proc/cmdline \
+    | sed -n 's/^cache22\.ssh\.authorized_keys=//p' | head -1)
+if [ -z "$keys_b64" ]; then
+    exit 0
+fi
+keys=$(printf '%s' "$keys_b64" | base64 -d 2>/dev/null || true)
+if [ -z "$keys" ]; then
+    echo "cache22-kexec-setup: cmdline authorized_keys decode failed" >&2
+    exit 0
+fi
+install -d -m 0700 /root/.ssh
+printf '%s\n' "$keys" > /root/.ssh/authorized_keys
+chmod 0600 /root/.ssh/authorized_keys
+echo "cache22-kexec-setup: installed $(grep -c '' /root/.ssh/authorized_keys) authorized_keys"
+EOF
+
+install -Dm0644 /dev/stdin "$ROOTFS/etc/systemd/system/cache22-kexec-setup.service" <<'EOF'
+[Unit]
+Description=cache22 kexec entry: install SSH keys from kernel cmdline
+DefaultDependencies=no
+After=systemd-tmpfiles-setup.service
+Before=sshd.service multi-user.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/cache22-kexec-setup
+
+[Install]
+WantedBy=multi-user.target
+EOF
+chroot "$ROOTFS" systemctl enable cache22-kexec-setup.service \
+    >/dev/null 2>&1 || true
+
 # ─── 4. Aggressive Fedora→cache22 rebrand ─────────────────────────
 echo "==> Rebranding Fedora → cache22"
 
@@ -438,5 +485,48 @@ xorriso -as mkisofs \
 
 ls -lh "$FINAL_ISO"
 sha256sum "$FINAL_ISO"
+
+# ─── 10. Kexec assets (for VPS installs) ──────────────────────────
+# For installs where the user can't mount the ISO (most cheap VPS
+# providers), we publish the same kernel + initramfs as standalone
+# files, plus a "fat" initramfs that has the squashfs embedded so the
+# kexec'd live env is fully self-contained (no network needed during
+# boot beyond what cache22-install itself uses later).
+#
+# The fat initramfs is built by appending an uncompressed cpio archive
+# containing /run/initramfs/live/LiveOS/squashfs.img (the path dracut's
+# dmsquash-live module looks at by default) to the regular initramfs.
+# Linux's initrd handler concatenates cpio archives transparently.
+#
+# Naming: ISO date prefix so users can pin to a known build.
 echo
-echo "==> Done. ISO at $FINAL_ISO"
+echo "==> Building kexec assets"
+KEXEC_DIR=$(mktemp -d)
+mkdir -p "$KEXEC_DIR/run/initramfs/live/LiveOS"
+cp "$ISOROOT/LiveOS/squashfs.img" \
+   "$KEXEC_DIR/run/initramfs/live/LiveOS/squashfs.img"
+( cd "$KEXEC_DIR" && find . -print0 | cpio --null -o -H newc --quiet ) \
+    > "$WORK/boot/squashfs-addon.cpio"
+cat "$WORK/boot/initramfs.img" "$WORK/boot/squashfs-addon.cpio" \
+    > "$OUT/${ISO_NAME%-installer-*}-kexec-${ISO_DATE}-initramfs.img"
+cp "$WORK/boot/vmlinuz" \
+    "$OUT/${ISO_NAME%-installer-*}-kexec-${ISO_DATE}-vmlinuz"
+# Also publish the bootstrap script verbatim so users can curl it.
+install -m0755 "$HERE/cache22-kexec-bootstrap.sh" \
+    "$OUT/cache22-kexec-bootstrap.sh"
+rm -rf "$KEXEC_DIR" "$WORK/boot/squashfs-addon.cpio"
+
+echo
+echo "==> Kexec assets:"
+ls -lh "$OUT/cache22-kexec-${ISO_DATE}-vmlinuz" \
+       "$OUT/cache22-kexec-${ISO_DATE}-initramfs.img" \
+       "$OUT/cache22-kexec-bootstrap.sh"
+sha256sum "$OUT/cache22-kexec-${ISO_DATE}-vmlinuz" \
+          "$OUT/cache22-kexec-${ISO_DATE}-initramfs.img"
+
+echo
+echo "==> Done."
+echo "    ISO              $FINAL_ISO"
+echo "    Kexec vmlinuz    $OUT/cache22-kexec-${ISO_DATE}-vmlinuz"
+echo "    Kexec initramfs  $OUT/cache22-kexec-${ISO_DATE}-initramfs.img"
+echo "    Kexec bootstrap  $OUT/cache22-kexec-bootstrap.sh"
