@@ -4308,6 +4308,51 @@ cache22_inject_ssh_key() {
     info "cache22: SSH key injected for users 'cache' and 'root'"
 }
 
+# Place an Ignition config on a freshly written disk. This is what lets an
+# Ignition-provisioned distro be installed unattended by dd: Fedora CoreOS
+# reads ignition/config.ign from the partition labelled 'boot', Flatcar reads
+# config.ign from the partition labelled 'OEM'.
+fcos_inject_ignition() {
+    [ -s /configs/ignition.json ] || return 0
+
+    modprobe ext4 2>/dev/null || true
+    update_part
+
+    ign_part=
+    ign_dest=
+    ign_boot=$(blkid -t LABEL=boot -o device 2>/dev/null | head -1)
+    ign_oem=$(blkid -t LABEL=OEM -o device 2>/dev/null | head -1)
+
+    mkdir -p /ignmnt
+    if [ -b "$ign_boot" ] && mount "$ign_boot" /ignmnt 2>/dev/null; then
+        # The pristine Fedora CoreOS image ships this marker, and it is what
+        # tells GRUB to run Ignition on first boot. Without it the config
+        # would be written and then never read.
+        if [ -f /ignmnt/ignition.firstboot ]; then
+            ign_part=$ign_boot
+            ign_dest=ignition/config.ign
+        else
+            umount /ignmnt
+        fi
+    fi
+    if [ -z "$ign_part" ] && [ -b "$ign_oem" ] && mount "$ign_oem" /ignmnt 2>/dev/null; then
+        ign_part=$ign_oem
+        ign_dest=config.ign
+    fi
+
+    if [ -z "$ign_part" ]; then
+        warn "ignition: no Ignition-provisioned disk found; config not applied"
+        return 0
+    fi
+
+    mkdir -p "/ignmnt/$(dirname "$ign_dest")"
+    cat /configs/ignition.json >"/ignmnt/$ign_dest"
+    chmod 0600 "/ignmnt/$ign_dest"
+    umount /ignmnt
+    sync
+    info "ignition: config written to $ign_part /$ign_dest"
+}
+
 modify_os_on_disk() {
     only_process=$1
     info "Modify disk if is $only_process"
@@ -4317,6 +4362,7 @@ modify_os_on_disk() {
     # dd linux nocloud 
     if [ "$distro" = "dd" ] && [ "$only_process" != "nocloud" ] && ! lsblk -f /dev/$xda | grep ntfs; then
         cache22_inject_ssh_key
+        fcos_inject_ignition
         return
     fi
 

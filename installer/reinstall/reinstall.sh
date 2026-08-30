@@ -4013,6 +4013,9 @@ This script is outdated, please download reinstall.sh again.
     if [ -n "$frpc_config" ]; then
         cat "$frpc_config" >$initrd_dir/configs/frpc.conf
     fi
+    if [ -n "$ignition_config" ]; then
+        cat "$ignition_config" >$initrd_dir/configs/ignition.json
+    fi
 
     #  cloud-data  initrd
     if [ -n "$cloud_data" ]; then
@@ -4476,6 +4479,7 @@ for o in ci installer debug minimal allow-ping force-cn help \
     image-name: \
     boot-wim: \
     img: \
+    ignition: \
     cloud-data: \
     lang: \
     user: username: \
@@ -4579,6 +4583,34 @@ while true; do
             error_and_exit "Invalid $1 value: $2"
         fi
         hold=$2
+        shift 2
+        ;;
+    --ignition)
+        [ -n "$2" ] || error_and_exit "Need value for $1"
+
+        case "$(to_lower <<<"$2")" in
+        http://* | https://*)
+            ignition_config=$tmp/ignition.json
+            if ! curl -L "$2" -o "$ignition_config"; then
+                error_and_exit "Can't get ignition config from $2"
+            fi
+            ;;
+        *)
+            if ! { ignition_config=$(get_unix_path "$2") && [ -f "$ignition_config" ]; }; then
+                error_and_exit "File not exists: $2"
+            fi
+            ;;
+        esac
+
+        ignition_config=$(readlink -f "$ignition_config")
+
+        # Ignition consumes JSON. Butane YAML would be accepted silently by
+        # the installer and then ignored on first boot, so reject it here.
+        case "$(head -c 1 "$ignition_config")" in
+        '{') ;;
+        *) error_and_exit "Ignition config must be JSON. Transpile the Butane YAML with butane first." ;;
+        esac
+
         shift 2
         ;;
     --frpc-conf | --frpc-config)
