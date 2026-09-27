@@ -112,7 +112,7 @@ if (( APPS )); then
         echo "WARN: flatpak update reported errors (continuing)"
     if command -v distrobox >/dev/null 2>&1; then
         echo "==> distrobox upgrade --all"
-        distrobox upgrade --all || \
+        sudo -u "$(logname 2>/dev/null || echo "$SUDO_USER")" distrobox upgrade --all || \
             echo "WARN: distrobox upgrade reported errors (continuing)"
     fi
 fi
